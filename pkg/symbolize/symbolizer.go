@@ -58,6 +58,9 @@ var (
 	// symCacheHits counts the number of cache hits in the symbols cache
 	symCacheHits = expvar.NewInt("symbolizer.cache.hits")
 
+	// symCachedSymbols counts the number of cached symbol infos
+	symCachedSymbols = expvar.NewInt("symbolizer.cached.symbols")
+
 	// symModulesCount counts the number of loaded module exports
 	symModulesCount = expvar.NewInt("symbolizer.modules.count")
 
@@ -101,6 +104,11 @@ type module struct {
 	hasExports                 bool
 }
 
+type syminfo struct {
+	module string
+	symbol string
+}
+
 func (m *module) keepalive() {
 	m.accessed = time.Now()
 }
@@ -125,11 +133,10 @@ type Symbolizer struct {
 	// return address and the symbol information
 	// identifying the originated call. It is populated
 	// by the Debug Help API function when the module
-	// doesn't exist in process state. Subsequent
-	// calls to the produceFrame method will inspect
-	// this cache whenever the module is not located
-	// in process state
-	symbols map[uint32]map[va.Address]string
+	// doesn't exist in process state, and in addition
+	// it is populated by each export directory symbol
+	// resolution
+	symbols map[uint32]map[va.Address]syminfo
 
 	r     Resolver
 	psnap ps.Snapshotter
@@ -150,7 +157,7 @@ func NewSymbolizer(r Resolver, psnap ps.Snapshotter, config *config.Config, enqu
 		config:  config,
 		procs:   make(map[uint32]*process),
 		mods:    make(map[va.Address]*module),
-		symbols: make(map[uint32]map[va.Address]string),
+		symbols: make(map[uint32]map[va.Address]syminfo),
 		cleaner: time.NewTicker(time.Second * 2),
 		purger:  time.NewTicker(time.Minute * 5),
 		quit:    make(chan struct{}, 1),
@@ -196,6 +203,10 @@ func (s *Symbolizer) ProcessEvent(e *kevent.Kevent) (bool, error) {
 		pid := e.Kparams.MustGetPid()
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		if _, ok := s.symbols[pid]; !ok {
+			return true, nil
+		}
+		symCachedSymbols.Add(-int64(len(s.symbols[pid])))
 		delete(s.symbols, pid)
 		proc, ok := s.procs[pid]
 		if !ok {
@@ -206,6 +217,7 @@ func (s *Symbolizer) ProcessEvent(e *kevent.Kevent) (bool, error) {
 		delete(s.procs, pid)
 		return true, nil
 	}
+
 	if e.IsLoadImage() || e.IsUnloadImage() {
 		filename := e.GetParamAsString(kparams.ImagePath)
 		addr := e.Kparams.TryGetAddress(kparams.ImageBase)
@@ -231,14 +243,17 @@ func (s *Symbolizer) ProcessEvent(e *kevent.Kevent) (bool, error) {
 			log.Error(err)
 		}
 	}
+
 	if !e.Kparams.Contains(kparams.Callstack) {
 		return true, nil
 	}
 	defer e.Kparams.Remove(kparams.Callstack)
+
 	err := s.processCallstack(e)
 	if err != nil {
 		callstackProcessErrors.Add(1)
 	}
+
 	return true, nil
 }
 
@@ -300,6 +315,9 @@ func (s *Symbolizer) processCallstack(e *kevent.Kevent) error {
 		return nil
 	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if e.IsCreateFile() && e.IsOpenDisposition() {
 		// for high-volume events decorating
 		// the frames with symbol information
@@ -309,8 +327,6 @@ func (s *Symbolizer) processCallstack(e *kevent.Kevent) error {
 		s.pushFrames(addrs, e, true, false)
 		return nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if e.PS != nil {
 		var (
@@ -332,6 +348,10 @@ func (s *Symbolizer) processCallstack(e *kevent.Kevent) error {
 		// and resolve the module name that contains the function
 		if addr != 0 {
 			mod := e.PS.FindModuleByVa(addr)
+			// perform lookup against parent modules
+			if mod == nil && e.PS.Parent != nil {
+				mod = e.PS.Parent.FindModuleByVa(addr)
+			}
 			symbol := s.symbolizeAddress(pid, addr, mod)
 
 			if symbol != "" && symbol != "?" {
@@ -430,9 +450,9 @@ func (s *Symbolizer) pushFrames(addrs []va.Address, e *kevent.Kevent, fast, look
 // state. All symbols are resolved from the
 // PE export directory entries. If either the
 // symbol or module are not resolved, then we
-// fallback to Debug API.
+// fall back to Debug API.
 func (s *Symbolizer) produceFrame(addr va.Address, e *kevent.Kevent, fast, lookupExport bool) kevent.Frame {
-	frame := kevent.Frame{Addr: addr}
+	frame := kevent.Frame{PID: e.PID, Addr: addr}
 	if addr.InSystemRange() {
 		if s.config.SymbolizeKernelAddresses {
 			frame.Module = s.r.GetModuleName(windows.CurrentProcess(), addr)
@@ -440,11 +460,22 @@ func (s *Symbolizer) produceFrame(addr va.Address, e *kevent.Kevent, fast, looku
 		}
 		return frame
 	}
+
+	// did we hit this address previously?
+	if sym, ok := s.symbols[e.PID]; ok {
+		if symbol, ok := sym[addr]; ok {
+			symCacheHits.Add(1)
+			frame.Module, frame.Symbol = symbol.module, symbol.symbol
+			return frame
+		}
+	}
+
 	if fast {
 		if e.PS != nil {
 			mod := e.PS.FindModuleByVa(addr)
 			if mod != nil {
 				frame.Module = mod.Name
+				frame.ModuleAddress = mod.BaseAddress
 			}
 			if lookupExport {
 				frame.Symbol = s.resolveSymbolFromExportDirectory(addr, mod)
@@ -462,6 +493,7 @@ func (s *Symbolizer) produceFrame(addr va.Address, e *kevent.Kevent, fast, looku
 		}
 		if mod != nil {
 			frame.Module = mod.Name
+			frame.ModuleAddress = mod.BaseAddress
 			m, ok := s.mods[mod.BaseAddress]
 			peOK := true
 			if !ok {
@@ -501,20 +533,10 @@ func (s *Symbolizer) produceFrame(addr va.Address, e *kevent.Kevent, fast, looku
 			m.keepalive()
 		}
 		if frame.Module != "" && frame.Symbol != "" {
+			// store resolved symbol information in cache
+			s.cacheSymbol(e.PID, addr, &frame)
 			return frame
 		}
-	}
-
-	// did we hit this address previously?
-	if sym, ok := s.symbols[e.PID]; ok && sym[addr] != "" {
-		symCacheHits.Add(1)
-		n := strings.Split(sym[addr], "!")
-		if len(n) > 1 {
-			frame.Module, frame.Symbol = n[0], n[1]
-		}
-	}
-	if frame.Module != "" && frame.Symbol != "" {
-		return frame
 	}
 
 	debugHelpFallbacks.Add(1)
@@ -550,16 +572,21 @@ func (s *Symbolizer) produceFrame(addr va.Address, e *kevent.Kevent, fast, looku
 	}
 
 	// store resolved symbol information in cache
-	sym := frame.Module + "!" + frame.Symbol
-	if mod, ok := s.symbols[e.PID]; ok {
-		if _, ok := mod[addr]; !ok {
-			s.symbols[e.PID][addr] = sym
-		}
-	} else {
-		s.symbols[e.PID] = map[va.Address]string{addr: sym}
-	}
+	s.cacheSymbol(e.PID, addr, &frame)
 
 	return frame
+}
+
+func (s *Symbolizer) cacheSymbol(pid uint32, addr va.Address, frame *kevent.Frame) {
+	if sym, ok := s.symbols[pid]; ok {
+		if _, ok := sym[addr]; !ok {
+			symCachedSymbols.Add(1)
+			s.symbols[pid][addr] = syminfo{module: frame.Module, symbol: frame.Symbol}
+		}
+	} else {
+		symCachedSymbols.Add(1)
+		s.symbols[pid] = map[va.Address]syminfo{addr: {module: frame.Module, symbol: frame.Symbol}}
+	}
 }
 
 // resolveSymbolFromExportDirectory parses the module PE
@@ -589,11 +616,11 @@ func (s *Symbolizer) symbolizeAddress(pid uint32, addr va.Address, mod *pstypes.
 	symbol, ok := s.symbols[pid][addr]
 	if !ok && mod != nil {
 		// resolve symbol from the export directory
-		symbol = s.resolveSymbolFromExportDirectory(addr, mod)
+		symbol.symbol = s.resolveSymbolFromExportDirectory(addr, mod)
 	}
 
 	// try to get the symbol via Debug Help API
-	if symbol == "" {
+	if symbol.symbol == "" {
 		proc, ok := s.procs[pid]
 		if !ok {
 			handle, err := windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_QUERY_INFORMATION, false, pid)
@@ -612,23 +639,29 @@ func (s *Symbolizer) symbolizeAddress(pid uint32, addr va.Address, mod *pstypes.
 			s.procs[pid] = proc
 
 			// resolve address to symbol
-			symbol, _ = s.r.GetSymbolNameAndOffset(handle, addr)
+			symbol.symbol, _ = s.r.GetSymbolNameAndOffset(handle, addr)
+			symbol.module = s.r.GetModuleName(handle, addr)
 		} else {
-			symbol, _ = s.r.GetSymbolNameAndOffset(proc.handle, addr)
+			symbol.symbol, _ = s.r.GetSymbolNameAndOffset(proc.handle, addr)
+			symbol.module = s.r.GetModuleName(proc.handle, addr)
 			proc.keepalive()
 		}
 	}
 
+	if symbol.module == "" && mod != nil {
+		symbol.module = mod.Name
+	}
+
 	// cache the resolved symbol
-	if addrs, ok := s.symbols[pid]; ok {
-		if _, ok := addrs[addr]; !ok {
+	if sym, ok := s.symbols[pid]; ok {
+		if _, ok := sym[addr]; !ok {
 			s.symbols[pid][addr] = symbol
 		}
 	} else {
-		s.symbols[pid] = map[va.Address]string{addr: symbol}
+		s.symbols[pid] = map[va.Address]syminfo{addr: symbol}
 	}
 
-	return symbol
+	return symbol.symbol
 }
 
 // symbolFromRVA finds the closest export address before RVA.

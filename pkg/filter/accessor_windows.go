@@ -26,9 +26,7 @@ import (
 	"github.com/rabbitstack/fibratus/pkg/network"
 	psnap "github.com/rabbitstack/fibratus/pkg/ps"
 	"github.com/rabbitstack/fibratus/pkg/util/cmdline"
-	"github.com/rabbitstack/fibratus/pkg/util/loldrivers"
 	"github.com/rabbitstack/fibratus/pkg/util/signature"
-	"golang.org/x/sys/windows"
 	"net"
 	"path/filepath"
 	"strconv"
@@ -82,23 +80,24 @@ type psAccessor struct {
 	psnap psnap.Snapshotter
 }
 
-func (psAccessor) SetFields(fields []fields.Field) {}
+func (psAccessor) SetFields([]Field)            {}
+func (psAccessor) SetSegments([]fields.Segment) {}
 func (psAccessor) IsFieldAccessible(kevt *kevent.Kevent) bool {
 	return kevt.PS != nil || kevt.Category == ktypes.Process
 }
 
 func newPSAccessor(psnap psnap.Snapshotter) Accessor { return &psAccessor{psnap: psnap} }
 
-func (ps *psAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value, error) {
-	switch f {
+func (ps *psAccessor) Get(f Field, kevt *kevent.Kevent) (kparams.Value, error) {
+	switch f.Name {
 	case fields.PsPid:
-		// the process id that is generating the event
+		// identifier of the process that is generating the event
 		return kevt.PID, nil
 	case fields.PsSiblingPid, fields.PsChildPid:
 		if kevt.Category != ktypes.Process {
 			return nil, nil
 		}
-		// the id of a freshly created process. `kevt.PID` references the parent process
+		// the id of a created child process. `kevt.PID` is the parent process id
 		return kevt.Kparams.GetPid()
 	case fields.PsPpid:
 		ps := kevt.PS
@@ -256,17 +255,7 @@ func (ps *psAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value, e
 			return nil, nil
 		}
 		return kevt.Kparams.GetUint32(kparams.SessionID)
-	case fields.PsEnvs:
-		ps := kevt.PS
-		if ps == nil {
-			return nil, ErrPsNil
-		}
-		envs := make([]string, 0, len(ps.Envs))
-		for env := range ps.Envs {
-			envs = append(envs, env)
-		}
-		return envs, nil
-	case fields.PsModules:
+	case fields.PsModuleNames:
 		ps := kevt.PS
 		if ps == nil {
 			return nil, ErrPsNil
@@ -292,7 +281,7 @@ func (ps *psAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value, e
 		if kevt.Category != ktypes.Process {
 			return nil, nil
 		}
-		// find child process in snapshotter
+
 		pid, err := kevt.Kparams.GetPid()
 		if err != nil {
 			return nil, err
@@ -300,12 +289,14 @@ func (ps *psAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value, e
 		if ps.psnap == nil {
 			return nil, nil
 		}
+
 		proc := ps.psnap.FindAndPut(pid)
 		if proc == nil {
 			return nil, ErrPsNil
 		}
+
 		return proc.UUID(), nil
-	case fields.PsHandles:
+	case fields.PsHandleNames:
 		ps := kevt.PS
 		if ps == nil {
 			return nil, ErrPsNil
@@ -394,8 +385,8 @@ func (ps *psAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value, e
 			return nil, ErrPsNil
 		}
 		envs := make([]string, 0, len(ps.Envs))
-		for env := range ps.Envs {
-			envs = append(envs, env)
+		for k, v := range ps.Envs {
+			envs = append(envs, k+":"+v)
 		}
 		return envs, nil
 	case fields.PsParentHandles:
@@ -439,145 +430,96 @@ func (ps *psAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value, e
 			return nil, ErrPsNil
 		}
 		return ps.IsProtected, nil
-	default:
-		switch {
-		case f.IsEnvsMap():
-			// access the specific environment variable
-			env, _ := captureInBrackets(f.String())
-			ps := kevt.PS
-			if ps == nil {
-				return nil, ErrPsNil
+	case fields.PsAncestors:
+		if kevt.PS != nil {
+			ancestors := make([]*pstypes.PS, 0)
+			walk := func(proc *pstypes.PS) {
+				ancestors = append(ancestors, proc)
 			}
+			pstypes.Walk(walk, kevt.PS)
+
+			return ancestors, nil
+		}
+		return nil, ErrPsNil
+	case fields.PsModules:
+		if kevt.PS != nil {
+			return kevt.PS.Modules, nil
+		}
+		return nil, ErrPsNil
+	case fields.PsThreads:
+		if kevt.PS != nil {
+			return kevt.PS.Threads, nil
+		}
+		return nil, ErrPsNil
+	case fields.PsMmaps:
+		if kevt.PS != nil {
+			return kevt.PS.Mmaps, nil
+		}
+		return nil, ErrPsNil
+	case fields.PsAncestor:
+		if kevt.PS != nil {
+			n := -1
+			// if the index is given try to parse it
+			// to access the ancestor at the given level.
+			// For example, ps.ancestor[0] would retrieve
+			// the process parent, ps.ancestor[1] would
+			// return the process grandparent and so on.
+			if f.Arg != "" {
+				var err error
+				n, err = strconv.Atoi(f.Arg)
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			ancestors := make([]string, 0)
+			walk := func(proc *pstypes.PS) {
+				ancestors = append(ancestors, proc.Name)
+			}
+			pstypes.Walk(walk, kevt.PS)
+
+			if n >= 0 {
+				// return a single ancestor indicated by the index
+				if n < len(ancestors) {
+					return ancestors[n], nil
+				} else {
+					return "", nil
+				}
+			} else {
+				// return all ancestors
+				return ancestors, nil
+			}
+		}
+		return nil, ErrPsNil
+	case fields.PsEnvs:
+		ps := kevt.PS
+		if ps == nil {
+			return nil, ErrPsNil
+		}
+		// resolve a single env variable indicated by the arg
+		// For example, ps.envs[winroot] would return the value
+		// of the winroot environment variable
+		if f.Arg != "" {
+			env := f.Arg
 			v, ok := ps.Envs[env]
 			if ok {
 				return v, nil
 			}
-			// match on prefix
+
+			// match on env variable name prefix
 			for k, v := range ps.Envs {
 				if strings.HasPrefix(k, env) {
 					return v, nil
 				}
 			}
-		case f.IsModsMap():
-			name, segment := captureInBrackets(f.String())
-			ps := kevt.PS
-			if ps == nil {
-				return nil, ErrPsNil
+		} else {
+			// return all environment variables as a string slice
+			envs := make([]string, 0, len(ps.Envs))
+			for k, v := range ps.Envs {
+				envs = append(envs, k+":"+v)
 			}
-			mod := ps.FindModule(name)
-			if mod == nil {
-				return nil, nil
-			}
-
-			switch segment {
-			case fields.ModuleSize:
-				return mod.Size, nil
-			case fields.ModuleChecksum:
-				return mod.Checksum, nil
-			case fields.ModuleBaseAddress:
-				return mod.BaseAddress.String(), nil
-			case fields.ModuleDefaultAddress:
-				return mod.DefaultBaseAddress.String(), nil
-			case fields.ModuleLocation:
-				return filepath.Dir(mod.Name), nil
-			}
-		case f.IsAncestorMap():
-			return ancestorFields(f.String(), kevt)
+			return envs, nil
 		}
-
-		return nil, nil
-	}
-}
-
-const (
-	rootAncestor = "root"   // represents the root ancestor
-	anyAncestor  = "any"    // represents any ancestor in the hierarchy
-	frameUEnd    = "uend"   // represents the last user space stack frame
-	frameUStart  = "ustart" // represents the first user space stack frame
-	frameKEnd    = "kend"   // represents the last kernel space stack frame
-	frameKStart  = "kstart" // represents the first kernel space stack frame
-)
-
-// ancestorFields recursively walks the process ancestors and extracts
-// the required field values. If we get the `root` key, the root ancestor
-// fields are inspected, while `any` accumulates values of all ancestors.
-// Alternatively, the key may represent the depth that only returns the
-// ancestor located at the given depth, starting with 1 which is the immediate
-// process parent.
-func ancestorFields(field string, kevt *kevent.Kevent) (kparams.Value, error) {
-	key, segment := captureInBrackets(field)
-	if key == "" || segment == "" {
-		return nil, nil
-	}
-
-	var ps *pstypes.PS
-
-	switch key {
-	case rootAncestor:
-		walk := func(proc *pstypes.PS) {
-			ps = proc
-		}
-		pstypes.Walk(walk, kevt.PS)
-	case anyAncestor:
-		values := make([]string, 0)
-		walk := func(proc *pstypes.PS) {
-			switch segment {
-			case fields.ProcessName:
-				values = append(values, proc.Name)
-			case fields.ProcessID:
-				values = append(values, strconv.Itoa(int(proc.PID)))
-			case fields.ProcessSID:
-				values = append(values, proc.SID)
-			case fields.ProcessSessionID:
-				values = append(values, strconv.Itoa(int(proc.SessionID)))
-			case fields.ProcessCwd:
-				values = append(values, proc.Cwd)
-			case fields.ProcessCmdline:
-				values = append(values, proc.Cmdline)
-			case fields.ProcessArgs:
-				values = append(values, proc.Args...)
-			case fields.ProcessExe:
-				values = append(values, proc.Exe)
-			}
-		}
-		pstypes.Walk(walk, kevt.PS)
-		return values, nil
-	default:
-		depth, err := strconv.Atoi(key)
-		if err != nil {
-			return nil, err
-		}
-		var i int
-		walk := func(proc *pstypes.PS) {
-			i++
-			if i == depth {
-				ps = proc
-			}
-		}
-		pstypes.Walk(walk, kevt.PS)
-	}
-
-	if ps == nil {
-		return nil, nil
-	}
-
-	switch segment {
-	case fields.ProcessName:
-		return ps.Name, nil
-	case fields.ProcessID:
-		return ps.PID, nil
-	case fields.ProcessSID:
-		return ps.SID, nil
-	case fields.ProcessSessionID:
-		return ps.SessionID, nil
-	case fields.ProcessCwd:
-		return ps.Cwd, nil
-	case fields.ProcessCmdline:
-		return ps.Cmdline, nil
-	case fields.ProcessArgs:
-		return ps.Args, nil
-	case fields.ProcessExe:
-		return ps.Exe, nil
 	}
 
 	return nil, nil
@@ -586,7 +528,8 @@ func ancestorFields(field string, kevt *kevent.Kevent) (kparams.Value, error) {
 // threadAccessor fetches thread parameters from thread events.
 type threadAccessor struct{}
 
-func (threadAccessor) SetFields(fields []fields.Field) {}
+func (threadAccessor) SetFields([]Field)            {}
+func (threadAccessor) SetSegments([]fields.Segment) {}
 func (threadAccessor) IsFieldAccessible(kevt *kevent.Kevent) bool {
 	return !kevt.Callstack.IsEmpty() || kevt.Category == ktypes.Thread
 }
@@ -595,167 +538,188 @@ func newThreadAccessor() Accessor {
 	return &threadAccessor{}
 }
 
-func (t *threadAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value, error) {
-	switch f {
+func (t *threadAccessor) Get(f Field, e *kevent.Kevent) (kparams.Value, error) {
+	switch f.Name {
 	case fields.ThreadBasePrio:
-		return kevt.Kparams.GetUint8(kparams.BasePrio)
+		return e.Kparams.GetUint8(kparams.BasePrio)
 	case fields.ThreadIOPrio:
-		return kevt.Kparams.GetUint8(kparams.IOPrio)
+		return e.Kparams.GetUint8(kparams.IOPrio)
 	case fields.ThreadPagePrio:
-		return kevt.Kparams.GetUint8(kparams.PagePrio)
+		return e.Kparams.GetUint8(kparams.PagePrio)
 	case fields.ThreadKstackBase:
-		return kevt.GetParamAsString(kparams.KstackBase), nil
+		return e.GetParamAsString(kparams.KstackBase), nil
 	case fields.ThreadKstackLimit:
-		return kevt.GetParamAsString(kparams.KstackLimit), nil
+		return e.GetParamAsString(kparams.KstackLimit), nil
 	case fields.ThreadUstackBase:
-		return kevt.GetParamAsString(kparams.UstackBase), nil
+		return e.GetParamAsString(kparams.UstackBase), nil
 	case fields.ThreadUstackLimit:
-		return kevt.GetParamAsString(kparams.UstackLimit), nil
+		return e.GetParamAsString(kparams.UstackLimit), nil
 	case fields.ThreadEntrypoint, fields.ThreadStartAddress:
-		return kevt.GetParamAsString(kparams.StartAddress), nil
+		return e.GetParamAsString(kparams.StartAddress), nil
 	case fields.ThreadPID:
-		return kevt.Kparams.GetUint32(kparams.ProcessID)
+		return e.Kparams.GetUint32(kparams.ProcessID)
 	case fields.ThreadTEB:
-		return kevt.GetParamAsString(kparams.TEB), nil
+		return e.GetParamAsString(kparams.TEB), nil
 	case fields.ThreadAccessMask:
-		if kevt.Type != ktypes.OpenThread {
+		if e.Type != ktypes.OpenThread {
 			return nil, nil
 		}
-		return kevt.Kparams.GetString(kparams.DesiredAccess)
+		return e.Kparams.GetString(kparams.DesiredAccess)
 	case fields.ThreadAccessMaskNames:
-		if kevt.Type != ktypes.OpenThread {
+		if e.Type != ktypes.OpenThread {
 			return nil, nil
 		}
-		return kevt.GetFlagsAsSlice(kparams.DesiredAccess), nil
+		return e.GetFlagsAsSlice(kparams.DesiredAccess), nil
 	case fields.ThreadAccessStatus:
-		if kevt.Type != ktypes.OpenThread {
+		if e.Type != ktypes.OpenThread {
 			return nil, nil
 		}
-		return kevt.GetParamAsString(kparams.NTStatus), nil
+		return e.GetParamAsString(kparams.NTStatus), nil
 	case fields.ThreadCallstackSummary:
-		return kevt.Callstack.Summary(), nil
+		return e.Callstack.Summary(), nil
 	case fields.ThreadCallstackDetail:
-		return kevt.Callstack.String(), nil
+		return e.Callstack.String(), nil
 	case fields.ThreadCallstackModules:
-		return kevt.Callstack.Modules(), nil
-	case fields.ThreadCallstackSymbols:
-		return kevt.Callstack.Symbols(), nil
-	case fields.ThreadCallstackAllocationSizes:
-		return kevt.Callstack.AllocationSizes(kevt.PID), nil
-	case fields.ThreadCallstackProtections:
-		return kevt.Callstack.Protections(kevt.PID), nil
-	case fields.ThreadCallstackCallsiteLeadingAssembly:
-		return kevt.Callstack.CallsiteInsns(kevt.PID, true), nil
-	case fields.ThreadCallstackCallsiteTrailingAssembly:
-		return kevt.Callstack.CallsiteInsns(kevt.PID, false), nil
-	case fields.ThreadCallstackIsUnbacked:
-		return kevt.Callstack.ContainsUnbacked(), nil
-	default:
-		if f.IsCallstackMap() {
-			return callstackFields(f.String(), kevt)
-		}
-	}
-	return nil, nil
-}
-
-// callstackFields is responsible for extracting
-// the stack frame data for the specified frame
-// index. The index 0 represents the least-recent
-// frame, usually the base thread initialization
-// frames.
-func callstackFields(field string, kevt *kevent.Kevent) (kparams.Value, error) {
-	if kevt.Callstack.IsEmpty() {
-		return nil, nil
-	}
-	key, segment := captureInBrackets(field)
-	if key == "" || segment == "" {
-		return nil, nil
-	}
-	var i int
-	switch key {
-	case frameUStart:
-		i = 0
-	case frameUEnd:
-		for ; i < kevt.Callstack.Depth()-1 && !kevt.Callstack[i].Addr.InSystemRange(); i++ {
-		}
-		i--
-	case frameKStart:
-		for i = kevt.Callstack.Depth() - 1; i >= 0 && kevt.Callstack[i].Addr.InSystemRange(); i-- {
-		}
-		i++
-	case frameKEnd:
-		i = kevt.Callstack.Depth() - 1
-	default:
-		if strings.HasSuffix(key, ".dll") {
-			for n, frame := range kevt.Callstack {
-				if strings.EqualFold(filepath.Base(frame.Module), key) {
-					i = n
-					break
-				}
-			}
-		} else {
-			var err error
-			i, err = strconv.Atoi(key)
+		// return the module at the given frame level
+		if f.Arg != "" {
+			n, err := strconv.Atoi(f.Arg)
 			if err != nil {
 				return nil, err
 			}
+
+			if n > e.Callstack.Depth() {
+				return "", nil
+			}
+
+			return e.Callstack.FrameAt(n).Module, nil
+		}
+
+		return e.Callstack.Modules(), nil
+	case fields.ThreadCallstackSymbols:
+		// return the symbol at the given frame level
+		if f.Arg != "" {
+			n, err := strconv.Atoi(f.Arg)
+			if err != nil {
+				return nil, err
+			}
+
+			if n > e.Callstack.Depth() {
+				return "", nil
+			}
+
+			return e.Callstack.FrameAt(n).Symbol, nil
+		}
+
+		return e.Callstack.Symbols(), nil
+	case fields.ThreadCallstackAllocationSizes:
+		return e.Callstack.AllocationSizes(e.PID), nil
+	case fields.ThreadCallstackProtections:
+		return e.Callstack.Protections(e.PID), nil
+	case fields.ThreadCallstackCallsiteLeadingAssembly:
+		return e.Callstack.CallsiteInsns(e.PID, true), nil
+	case fields.ThreadCallstackCallsiteTrailingAssembly:
+		return e.Callstack.CallsiteInsns(e.PID, false), nil
+	case fields.ThreadCallstackIsUnbacked:
+		return e.Callstack.ContainsUnbacked(), nil
+	case fields.ThreadCallstack:
+		return e.Callstack, nil
+	case fields.ThreadStartAddressSymbol:
+		if e.Type != ktypes.CreateThread {
+			return nil, nil
+		}
+		return e.GetParamAsString(kparams.StartAddressSymbol), nil
+	case fields.ThreadStartAddressModule:
+		if e.Type != ktypes.CreateThread {
+			return nil, nil
+		}
+		return e.GetParamAsString(kparams.StartAddressModule), nil
+	case fields.ThreadCallstackAddresses:
+		return e.Callstack.Addresses(), nil
+	case fields.ThreadCallstackFinalUserModuleName, fields.ThreadCallstackFinalUserModulePath:
+		frame := e.Callstack.FinalUserFrame()
+		if frame != nil {
+			if f.Name == fields.ThreadCallstackFinalUserModuleName {
+				return filepath.Base(frame.Module), nil
+			}
+			return frame.Module, nil
+		}
+		return nil, nil
+	case fields.ThreadCallstackFinalUserSymbolName:
+		frame := e.Callstack.FinalUserFrame()
+		if frame != nil {
+			return frame.Symbol, nil
+		}
+		return nil, nil
+	case fields.ThreadCallstackFinalKernelModuleName, fields.ThreadCallstackFinalKernelModulePath:
+		frame := e.Callstack.FinalKernelFrame()
+		if frame != nil {
+			if f.Name == fields.ThreadCallstackFinalKernelModuleName {
+				return filepath.Base(frame.Module), nil
+			}
+			return frame.Module, nil
+		}
+		return nil, nil
+	case fields.ThreadCallstackFinalKernelSymbolName:
+		frame := e.Callstack.FinalKernelFrame()
+		if frame != nil {
+			return frame.Symbol, nil
+		}
+		return nil, nil
+	case fields.ThreadCallstackFinalUserModuleSignatureIsSigned, fields.ThreadCallstackFinalUserModuleSignatureIsTrusted:
+		frame := e.Callstack.FinalUserFrame()
+		if frame == nil || (frame != nil && frame.ModuleAddress.IsZero()) {
+			return nil, nil
+		}
+
+		sign := getSignature(frame.ModuleAddress, frame.Module, false)
+		if sign == nil {
+			return nil, nil
+		}
+
+		if f.Name == fields.ThreadCallstackFinalUserModuleSignatureIsSigned {
+			return sign.IsSigned(), nil
+		}
+
+		return sign.IsTrusted(), nil
+	case fields.ThreadCallstackFinalUserModuleSignatureCertIssuer, fields.ThreadCallstackFinalUserModuleSignatureCertSubject:
+		frame := e.Callstack.FinalUserFrame()
+		if frame == nil || (frame != nil && frame.ModuleAddress.IsZero()) {
+			return nil, nil
+		}
+
+		sign := getSignature(frame.ModuleAddress, frame.Module, true)
+		if sign == nil {
+			return nil, nil
+		}
+
+		if sign.HasCertificate() && f.Name == fields.ThreadCallstackFinalUserModuleSignatureCertIssuer {
+			return sign.Cert.Issuer, nil
+		}
+
+		if sign.HasCertificate() {
+			return sign.Cert.Subject, nil
 		}
 	}
 
-	if i > kevt.Callstack.Depth() || i < 0 {
-		i = 0
-	}
-	f := kevt.Callstack[i]
-
-	switch segment {
-	case fields.FrameAddress:
-		return f.Addr.String(), nil
-	case fields.FrameSymbolOffset:
-		return f.Offset, nil
-	case fields.FrameModule:
-		return f.Module, nil
-	case fields.FrameSymbol:
-		return f.Symbol, nil
-	case fields.FrameProtection, fields.FrameAllocationSize:
-		proc, err := windows.OpenProcess(windows.PROCESS_QUERY_INFORMATION, false, kevt.PID)
-		if err != nil {
-			return nil, err
-		}
-		defer windows.Close(proc)
-		if segment == fields.FrameProtection {
-			return f.Protection(proc), nil
-		}
-		return f.AllocationSize(proc), nil
-	case fields.FrameCallsiteLeadingAssembly, fields.FrameCallsiteTrailingAssembly:
-		proc, err := windows.OpenProcess(windows.PROCESS_QUERY_INFORMATION|windows.PROCESS_VM_READ, false, kevt.PID)
-		if err != nil {
-			return nil, err
-		}
-		defer windows.Close(proc)
-		if segment == fields.FrameCallsiteLeadingAssembly {
-			return f.CallsiteAssembly(proc, true), nil
-		}
-		return f.CallsiteAssembly(proc, false), nil
-	case fields.FrameIsUnbacked:
-		return f.IsUnbacked(), nil
-	}
 	return nil, nil
 }
 
 // fileAccessor extracts file specific values.
 type fileAccessor struct{}
 
-func (fileAccessor) SetFields(fields []fields.Field) {
+func (fileAccessor) SetFields(fields []Field) {
 	initLOLDriversClient(fields)
 }
+func (fileAccessor) SetSegments([]fields.Segment) {}
+
 func (fileAccessor) IsFieldAccessible(kevt *kevent.Kevent) bool { return kevt.Category == ktypes.File }
 
 func newFileAccessor() Accessor {
 	return &fileAccessor{}
 }
 
-func (l *fileAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value, error) {
-	switch f {
+func (l *fileAccessor) Get(f Field, kevt *kevent.Kevent) (kparams.Value, error) {
+	switch f.Name {
 	case fields.FilePath:
 		return kevt.GetParamAsString(kparams.FilePath), nil
 	case fields.FileName:
@@ -791,7 +755,7 @@ func (l *fileAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value, 
 		return kevt.GetParamAsString(kparams.MemProtect), nil
 	case fields.FileIsDriverVulnerable, fields.FileIsDriverMalicious:
 		if kevt.IsCreateDisposition() && kevt.IsSuccess() {
-			return isLOLDriver(f, kevt)
+			return isLOLDriver(f.Name, kevt)
 		}
 		return false, nil
 	case fields.FileIsDLL:
@@ -818,15 +782,18 @@ func (l *fileAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value, 
 		return kevt.Kparams.TryGetUint32(kparams.FileInfoClass) == fs.DispositionClass &&
 			kevt.Kparams.TryGetUint64(kparams.FileExtraInfo) > 0, nil
 	}
+
 	return nil, nil
 }
 
 // imageAccessor extracts image (DLL, executable, driver) event values.
 type imageAccessor struct{}
 
-func (imageAccessor) SetFields(fields []fields.Field) {
+func (imageAccessor) SetFields(fields []Field) {
 	initLOLDriversClient(fields)
 }
+func (imageAccessor) SetSegments([]fields.Segment) {}
+
 func (imageAccessor) IsFieldAccessible(kevt *kevent.Kevent) bool {
 	return kevt.Category == ktypes.Image
 }
@@ -835,8 +802,8 @@ func newImageAccessor() Accessor {
 	return &imageAccessor{}
 }
 
-func (i *imageAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value, error) {
-	if kevt.IsLoadImage() && (f == fields.ImageSignatureType || f == fields.ImageSignatureLevel || f.IsImageCert()) {
+func (i *imageAccessor) Get(f Field, kevt *kevent.Kevent) (kparams.Value, error) {
+	if kevt.IsLoadImage() && (f.Name == fields.ImageSignatureType || f.Name == fields.ImageSignatureLevel || f.Name.IsImageCert()) {
 		filename := kevt.GetParamAsString(kparams.ImagePath)
 		addr := kevt.Kparams.MustGetUint64(kparams.ImageBase)
 		typ := kevt.Kparams.MustGetUint32(kparams.ImageSignatureType)
@@ -853,7 +820,7 @@ func (i *imageAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value,
 					Filename: filename,
 				}
 			}
-			if f.IsImageCert() {
+			if f.Name.IsImageCert() {
 				err := sign.ParseCertificate()
 				if err != nil {
 					certErrors.Add(1)
@@ -877,7 +844,7 @@ func (i *imageAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value,
 				if sign.IsSigned() {
 					sign.Verify()
 				}
-				if f.IsImageCert() {
+				if f.Name.IsImageCert() {
 					err := sign.ParseCertificate()
 					if err != nil {
 						certErrors.Add(1)
@@ -900,7 +867,7 @@ func (i *imageAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value,
 		}
 	}
 
-	switch f {
+	switch f.Name {
 	case fields.ImagePath:
 		return kevt.GetParamAsString(kparams.ImagePath), nil
 	case fields.ImageName:
@@ -931,7 +898,7 @@ func (i *imageAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value,
 		return kevt.Kparams.GetTime(kparams.ImageCertNotAfter)
 	case fields.ImageIsDriverVulnerable, fields.ImageIsDriverMalicious:
 		if kevt.IsLoadImage() {
-			return isLOLDriver(f, kevt)
+			return isLOLDriver(f.Name, kevt)
 		}
 		return false, nil
 	case fields.ImageIsDLL:
@@ -947,13 +914,15 @@ func (i *imageAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value,
 		}
 		return p.IsDotnet, nil
 	}
+
 	return nil, nil
 }
 
 // registryAccessor extracts registry specific parameters.
 type registryAccessor struct{}
 
-func (registryAccessor) SetFields(fields []fields.Field) {}
+func (registryAccessor) SetFields([]Field)            {}
+func (registryAccessor) SetSegments([]fields.Segment) {}
 func (registryAccessor) IsFieldAccessible(kevt *kevent.Kevent) bool {
 	return kevt.Category == ktypes.Registry
 }
@@ -962,8 +931,8 @@ func newRegistryAccessor() Accessor {
 	return &registryAccessor{}
 }
 
-func (r *registryAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value, error) {
-	switch f {
+func (r *registryAccessor) Get(f Field, kevt *kevent.Kevent) (kparams.Value, error) {
+	switch f.Name {
 	case fields.RegistryPath:
 		return kevt.GetParamAsString(kparams.RegPath), nil
 	case fields.RegistryKeyName:
@@ -981,6 +950,7 @@ func (r *registryAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Val
 	case fields.RegistryStatus:
 		return kevt.GetParamAsString(kparams.NTStatus), nil
 	}
+
 	return nil, nil
 }
 
@@ -989,14 +959,16 @@ type networkAccessor struct {
 	reverseDNS *network.ReverseDNS
 }
 
-func (n *networkAccessor) SetFields(flds []fields.Field) {
+func (n *networkAccessor) SetFields(flds []Field) {
 	for _, f := range flds {
-		if f == fields.NetSIPNames || f == fields.NetDIPNames {
+		if f.Name == fields.NetSIPNames || f.Name == fields.NetDIPNames {
 			n.reverseDNS = network.GetReverseDNS(2000, time.Minute*30, time.Minute*2)
 			break
 		}
 	}
 }
+
+func (networkAccessor) SetSegments([]fields.Segment) {}
 
 func (networkAccessor) IsFieldAccessible(kevt *kevent.Kevent) bool {
 	return kevt.Category == ktypes.Net
@@ -1004,8 +976,8 @@ func (networkAccessor) IsFieldAccessible(kevt *kevent.Kevent) bool {
 
 func newNetworkAccessor() Accessor { return &networkAccessor{} }
 
-func (n *networkAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value, error) {
-	switch f {
+func (n *networkAccessor) Get(f Field, kevt *kevent.Kevent) (kparams.Value, error) {
+	switch f.Name {
 	case fields.NetDIP:
 		return kevt.Kparams.GetIP(kparams.NetDIP)
 	case fields.NetSIP:
@@ -1027,6 +999,7 @@ func (n *networkAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Valu
 	case fields.NetSIPNames:
 		return n.resolveNamesForIP(kevt.Kparams.MustGetIP(kparams.NetSIP))
 	}
+
 	return nil, nil
 }
 
@@ -1044,15 +1017,16 @@ func (n *networkAccessor) resolveNamesForIP(ip net.IP) ([]string, error) {
 // handleAccessor extracts handle event values.
 type handleAccessor struct{}
 
-func (handleAccessor) SetFields(fields []fields.Field) {}
+func (handleAccessor) SetFields([]Field)            {}
+func (handleAccessor) SetSegments([]fields.Segment) {}
 func (handleAccessor) IsFieldAccessible(kevt *kevent.Kevent) bool {
 	return kevt.Category == ktypes.Handle
 }
 
 func newHandleAccessor() Accessor { return &handleAccessor{} }
 
-func (h *handleAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value, error) {
-	switch f {
+func (h *handleAccessor) Get(f Field, kevt *kevent.Kevent) (kparams.Value, error) {
+	switch f.Name {
 	case fields.HandleID:
 		return kevt.Kparams.GetUint32(kparams.HandleID)
 	case fields.HandleType:
@@ -1062,51 +1036,66 @@ func (h *handleAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value
 	case fields.HandleObject:
 		return kevt.Kparams.GetUint64(kparams.HandleObject)
 	}
+
 	return nil, nil
 }
 
 // peAccessor extracts PE specific values.
 type peAccessor struct {
-	fields []fields.Field
+	fields   []Field
+	segments []fields.Segment
 }
 
-func (pa *peAccessor) SetFields(fields []fields.Field) {
+func (pa *peAccessor) SetFields(fields []Field) {
 	pa.fields = fields
 }
+func (pa *peAccessor) SetSegments(segments []fields.Segment) {
+	pa.segments = segments
+}
+
 func (peAccessor) IsFieldAccessible(kevt *kevent.Kevent) bool {
 	return kevt.PS != nil || kevt.IsLoadImage()
 }
 
-// parserOpts traverses all fields declared in the expression and
+// parserOpts traverses all fields/segments declared in the expression and
 // dynamically determines what aspects of the PE need to be parsed.
 func (pa *peAccessor) parserOpts() []pe.Option {
 	var opts []pe.Option
+	var peSections bool
+
 	for _, f := range pa.fields {
-		if f.IsPeSection() || f.IsPeSectionsMap() || f.IsPeModified() {
+		if f.Name.IsPeSectionsPseudo() {
+			peSections = true
+		}
+		if f.Name.IsPeSection() || f.Name.IsPeModified() {
 			opts = append(opts, pe.WithSections())
 		}
-		if f.IsPeSymbol() {
+		if f.Name.IsPeSymbol() {
 			opts = append(opts, pe.WithSymbols())
 		}
-		if f.IsPeSectionEntropy() {
-			opts = append(opts, pe.WithSections(), pe.WithSectionEntropy())
-		}
-		if f.IsPeVersionResource() || f.IsPeResourcesMap() {
+		if f.Name.IsPeVersionResource() || f.Name.IsPeVersionResources() {
 			opts = append(opts, pe.WithVersionResources())
 		}
-		if f.IsPeImphash() {
+		if f.Name.IsPeImphash() {
 			opts = append(opts, pe.WithImphash())
 		}
-		if f.IsPeDotnet() || f.IsPeModified() {
+		if f.Name.IsPeDotnet() || f.Name.IsPeModified() {
 			opts = append(opts, pe.WithCLR())
 		}
-		if f.IsPeAnomalies() {
+		if f.Name.IsPeAnomalies() {
 			opts = append(opts, pe.WithSections(), pe.WithSymbols())
 		}
-		if f.IsPeSignature() {
+		if f.Name.IsPeSignature() {
 			opts = append(opts, pe.WithSecurity())
 		}
 	}
+
+	for _, s := range pa.segments {
+		if peSections && s.IsEntropy() {
+			opts = append(opts, pe.WithSections(), pe.WithSectionEntropy())
+		}
+	}
+
 	return opts
 }
 
@@ -1117,7 +1106,7 @@ func newPEAccessor() Accessor {
 	return &peAccessor{}
 }
 
-func (pa *peAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value, error) {
+func (pa *peAccessor) Get(f Field, kevt *kevent.Kevent) (kparams.Value, error) {
 	var p *pe.PE
 	if kevt.PS != nil && kevt.PS.PE != nil {
 		p = kevt.PS.PE
@@ -1130,10 +1119,10 @@ func (pa *peAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value, e
 	// original file name as part of the CreateProcess event,
 	// then the parser obtains the PE metadata for the executable
 	// path parameter
-	if (kevt.PS != nil && kevt.PS.Exe != "" && p == nil) || f == fields.PePsChildFileName || f == fields.PsChildPeFilename {
+	if (kevt.PS != nil && kevt.PS.Exe != "" && p == nil) || f.Name == fields.PePsChildFileName || f.Name == fields.PsChildPeFilename {
 		var err error
 		var exe string
-		if (f == fields.PePsChildFileName || f == fields.PsChildPeFilename) && kevt.IsCreateProcess() {
+		if (f.Name == fields.PePsChildFileName || f.Name == fields.PsChildPeFilename) && kevt.IsCreateProcess() {
 			exe = kevt.GetParamAsString(kparams.Exe)
 		} else {
 			exe = kevt.PS.Exe
@@ -1149,7 +1138,7 @@ func (pa *peAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value, e
 	// PE for loaded executables followed by fetching the PE
 	// from process' memory at the base address of the loaded
 	// executable image
-	if kevt.IsLoadImage() && f.IsPeModified() {
+	if kevt.IsLoadImage() && f.Name.IsPeModified() {
 		filename := kevt.GetParamAsString(kparams.ImagePath)
 		isExecutable := filepath.Ext(filename) == ".exe" || kevt.Kparams.TryGetBool(kparams.FileIsExecutable)
 		if !isExecutable {
@@ -1179,15 +1168,15 @@ func (pa *peAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value, e
 	}
 
 	// verify signature
-	if f.IsPeSignature() {
+	if f.Name.IsPeSignature() {
 		p.VerifySignature()
 	}
 
-	if f != fields.PePsChildFileName {
+	if f.Name != fields.PePsChildFileName {
 		kevt.PS.PE = p
 	}
 
-	switch f {
+	switch f.Name {
 	case fields.PeEntrypoint:
 		return p.EntryPoint, nil
 	case fields.PeBaseAddress:
@@ -1257,36 +1246,32 @@ func (pa *peAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value, e
 		return p.VersionResources[pe.ProductName], nil
 	case fields.PeProductVersion:
 		return p.VersionResources[pe.ProductVersion], nil
-	default:
-		switch {
-		case f.IsPeSectionsMap():
-			// get the section name
-			section, segment := captureInBrackets(f.String())
-			sec := p.Section(section)
-			if sec == nil {
-				return nil, nil
-			}
-			switch segment {
-			case fields.SectionEntropy:
-				return sec.Entropy, nil
-			case fields.SectionMD5Hash:
-				return sec.Md5, nil
-			case fields.SectionSize:
-				return sec.Size, nil
-			}
-		case f.IsPeResourcesMap():
-			// consult the resource name
-			key, _ := captureInBrackets(f.String())
+	case fields.PeSections:
+		return p.Sections, nil
+	case fields.PeResources:
+		// return a single version resource indicated by the arg.
+		// For example, pe.resources[FileDescription] returns the
+		// original file description present in the resource directory
+		key := f.Arg
+		if key != "" {
 			v, ok := p.VersionResources[key]
 			if ok {
 				return v, nil
 			}
-			// match on prefix (e.g. pe.resources[Org] = Blackwater)
+
+			// match on version name prefix
 			for k, v := range p.VersionResources {
 				if strings.HasPrefix(k, key) {
 					return v, nil
 				}
 			}
+		} else {
+			// return all version resources as a string slice
+			resources := make([]string, 0, len(p.VersionResources))
+			for k, v := range p.VersionResources {
+				resources = append(resources, k+":"+v)
+			}
+			return resources, nil
 		}
 	}
 
@@ -1296,15 +1281,16 @@ func (pa *peAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value, e
 // memAccessor extracts parameters from memory alloc/free events.
 type memAccessor struct{}
 
-func (memAccessor) SetFields(fields []fields.Field)            {}
+func (memAccessor) SetFields([]Field)                          {}
+func (memAccessor) SetSegments([]fields.Segment)               {}
 func (memAccessor) IsFieldAccessible(kevt *kevent.Kevent) bool { return kevt.Category == ktypes.Mem }
 
 func newMemAccessor() Accessor {
 	return &memAccessor{}
 }
 
-func (*memAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value, error) {
-	switch f {
+func (*memAccessor) Get(f Field, kevt *kevent.Kevent) (kparams.Value, error) {
+	switch f.Name {
 	case fields.MemPageType:
 		return kevt.GetParamAsString(kparams.MemPageType), nil
 	case fields.MemAllocType:
@@ -1318,13 +1304,15 @@ func (*memAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value, err
 	case fields.MemProtectionMask:
 		return kevt.Kparams.GetString(kparams.MemProtectMask)
 	}
+
 	return nil, nil
 }
 
 // dnsAccessor extracts values from DNS query/response event parameters.
 type dnsAccessor struct{}
 
-func (dnsAccessor) SetFields(fields []fields.Field) {}
+func (dnsAccessor) SetFields([]Field)            {}
+func (dnsAccessor) SetSegments([]fields.Segment) {}
 func (dnsAccessor) IsFieldAccessible(kevt *kevent.Kevent) bool {
 	return kevt.Type.Subcategory() == ktypes.DNS
 }
@@ -1333,8 +1321,8 @@ func newDNSAccessor() Accessor {
 	return &dnsAccessor{}
 }
 
-func (*dnsAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value, error) {
-	switch f {
+func (*dnsAccessor) Get(f Field, kevt *kevent.Kevent) (kparams.Value, error) {
+	switch f.Name {
 	case fields.DNSName:
 		return kevt.GetParamAsString(kparams.DNSName), nil
 	case fields.DNSRR:
@@ -1346,60 +1334,6 @@ func (*dnsAccessor) Get(f fields.Field, kevt *kevent.Kevent) (kparams.Value, err
 	case fields.DNSAnswers:
 		return kevt.Kparams.GetSlice(kparams.DNSAnswers)
 	}
+
 	return nil, nil
-}
-
-func captureInBrackets(s string) (string, fields.Segment) {
-	lbracket := strings.Index(s, "[")
-	if lbracket == -1 {
-		return "", ""
-	}
-	rbracket := strings.Index(s, "]")
-	if rbracket == -1 {
-		return "", ""
-	}
-	if lbracket+1 > len(s) {
-		return "", ""
-	}
-	if rbracket+2 < len(s) {
-		return s[lbracket+1 : rbracket], fields.Segment(s[rbracket+2:])
-	}
-	return s[lbracket+1 : rbracket], ""
-}
-
-// isLOLDriver interacts with the loldrivers client to determine
-// whether the loaded/dropped driver is malicious or vulnerable.
-func isLOLDriver(f fields.Field, kevt *kevent.Kevent) (kparams.Value, error) {
-	var filename string
-	if kevt.Category == ktypes.File {
-		filename = kevt.GetParamAsString(kparams.FilePath)
-	} else {
-		filename = kevt.GetParamAsString(kparams.ImagePath)
-	}
-	isDriver := filepath.Ext(filename) == ".sys" || kevt.Kparams.TryGetBool(kparams.FileIsDriver)
-	if !isDriver {
-		return nil, nil
-	}
-	ok, driver := loldrivers.GetClient().MatchHash(filename)
-	if !ok {
-		return nil, nil
-	}
-	if (f == fields.FileIsDriverVulnerable || f == fields.ImageIsDriverVulnerable) && driver.IsVulnerable {
-		return true, nil
-	}
-	if (f == fields.FileIsDriverMalicious || f == fields.ImageIsDriverMalicious) && driver.IsMalicious {
-		return true, nil
-	}
-	return false, nil
-}
-
-// initLOLDriversClient initializes the loldrivers client if the filter expression
-// contains any of the relevant fields.
-func initLOLDriversClient(flds []fields.Field) {
-	for _, f := range flds {
-		if f == fields.FileIsDriverVulnerable || f == fields.FileIsDriverMalicious ||
-			f == fields.ImageIsDriverVulnerable || f == fields.ImageIsDriverMalicious {
-			loldrivers.InitClient(loldrivers.WithAsyncDownload())
-		}
-	}
 }

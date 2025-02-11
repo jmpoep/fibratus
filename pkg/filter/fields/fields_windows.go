@@ -19,21 +19,14 @@
 package fields
 
 import (
-	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/rabbitstack/fibratus/pkg/kevent/kparams"
 )
 
-// pathRegexp splits the provided path into different components. The first capture
-// contains the indexed field name. Next is the indexed key and, finally the segment.
-var pathRegexp = regexp.MustCompile(`(pe.sections|pe.resources|ps.envs|ps.modules|ps.ancestor|kevt.arg|thread.callstack)\[(.+\s*)].?(.*)`)
-
 // Field represents the type alias for the field
 type Field string
-
-// IsEmpty determines if this field is empty.
-func (f Field) IsEmpty() bool { return f == "" }
 
 const (
 	// PsPid represents the process id field
@@ -62,14 +55,14 @@ const (
 	PsSessionID Field = "ps.sessionid"
 	// PsEnvs represents the process environment variables
 	PsEnvs Field = "ps.envs"
-	// PsHandles represents the process handles
-	PsHandles Field = "ps.handles"
+	// PsHandleNames represents the process handles
+	PsHandleNames Field = "ps.handles"
 	// PsHandleTypes represents the process handle types
 	PsHandleTypes Field = "ps.handle.types"
 	// PsDTB represents the process directory table base address
 	PsDTB Field = "ps.dtb"
-	// PsModules represents the process modules
-	PsModules Field = "ps.modules"
+	// PsModuleNames represents the process module file names
+	PsModuleNames Field = "ps.modules"
 	// PsParentPid represents the parent process identifier field
 	PsParentPid Field = "ps.parent.pid"
 	// PsParentName represents the parent process name field
@@ -100,7 +93,7 @@ const (
 	PsParentHandleTypes Field = "ps.parent.handle.types"
 	// PsParentDTB represents the parent process directory table base address field
 	PsParentDTB Field = "ps.parent.dtb"
-	// PsAncestor represents the process ancestor sequence field
+	// PsAncestor represents the process ancestor field
 	PsAncestor Field = "ps.ancestor"
 	// PsAccessMask represents the process access rights field
 	PsAccessMask Field = "ps.access.mask"
@@ -201,8 +194,6 @@ const (
 	ThreadAccessMaskNames Field = "thread.access.mask.names"
 	// ThreadAccessStatus represents the thread access status field
 	ThreadAccessStatus Field = "thread.access.status"
-	// ThreadCallstack represents the field that provides access to stack frames
-	ThreadCallstack Field = "thread.callstack"
 	// ThreadCallstackSummary represents the thread callstack summary field
 	ThreadCallstackSummary Field = "thread.callstack.summary"
 	// ThreadCallstackDetail represents the thread callstack detail field
@@ -221,11 +212,35 @@ const (
 	ThreadCallstackCallsiteTrailingAssembly Field = "thread.callstack.callsite_trailing_assembly"
 	// ThreadCallstackIsUnbacked represents the field that indicates if there is an unbacked stack frame
 	ThreadCallstackIsUnbacked Field = "thread.callstack.is_unbacked"
+	// ThreadStartAddressSymbol represents the symbol corresponding to the thread start address
+	ThreadStartAddressSymbol Field = "thread.start_address.symbol"
+	// ThreadStartAddressModule represents the module corresponding to the thread start address
+	ThreadStartAddressModule Field = "thread.start_address.module"
+	// ThreadCallstackAddresses represents the all callstack return addresses
+	ThreadCallstackAddresses Field = "thread.callstack.addresses"
+	// ThreadCallstackFinalUserModuleName represents the final user space stack frame module name
+	ThreadCallstackFinalUserModuleName Field = "thread.callstack.final_user_module.name"
+	// ThreadCallstackFinalUserModulePath represents the final user space stack frame module path
+	ThreadCallstackFinalUserModulePath Field = "thread.callstack.final_user_module.path"
+	// ThreadCallstackFinalUserSymbolName represents the final user space stack frame symbol name
+	ThreadCallstackFinalUserSymbolName Field = "thread.callstack.final_user_symbol.name"
+	// ThreadCallstackFinalKernelModuleName represents the final kernel space stack frame module name
+	ThreadCallstackFinalKernelModuleName Field = "thread.callstack.final_kernel_module.name"
+	// ThreadCallstackFinalKernelModulePath represents the final kernel space stack frame module name
+	ThreadCallstackFinalKernelModulePath Field = "thread.callstack.final_kernel_module.path"
+	// ThreadCallstackFinalKernelSymbolName represents the final kernel space stack frame symbol name
+	ThreadCallstackFinalKernelSymbolName Field = "thread.callstack.final_kernel_symbol.name"
+	// ThreadCallstackFinalUserModuleSignatureIsSigned represents the signature status of the final user space stack frame module
+	ThreadCallstackFinalUserModuleSignatureIsSigned Field = "thread.callstack.final_user_module.signature.is_signed"
+	// ThreadCallstackFinalUserModuleSignatureIsTrusted represents the trust status of the final user space stack frame module signature
+	ThreadCallstackFinalUserModuleSignatureIsTrusted Field = "thread.callstack.final_user_module.signature.is_trusted"
+	// ThreadCallstackFinalUserModuleSignatureCertIssuer represents the final user space stack frame module certificate issuer
+	ThreadCallstackFinalUserModuleSignatureCertIssuer Field = "thread.callstack.final_user_module.signature.cert.issuer"
+	// ThreadCallstackFinalUserModuleSignatureCertSubject represents the final user space stack frame module certificate subject
+	ThreadCallstackFinalUserModuleSignatureCertSubject Field = "thread.callstack.final_user_module.signature.cert.subject"
 
 	// PeNumSections represents the number of sections
 	PeNumSections Field = "pe.nsections"
-	// PeSections represents distinct section inside PE
-	PeSections Field = "pe.sections"
 	// PeNumSymbols represents the number of exported symbols
 	PeNumSymbols Field = "pe.nsymbols"
 	// PeSymbols represents imported symbols
@@ -493,9 +508,6 @@ const (
 	DNSAnswers Field = "dns.answers"
 	// DNSRcode identifies the field that represents the DNS response code
 	DNSRcode Field = "dns.rcode"
-
-	// None represents the unknown field
-	None Field = ""
 )
 
 // String casts the field type to string.
@@ -514,17 +526,14 @@ func (f Field) IsMemField() bool      { return strings.HasPrefix(string(f), "mem
 func (f Field) IsDNSField() bool      { return strings.HasPrefix(string(f), "dns.") }
 
 func (f Field) IsPeSection() bool { return f == PeNumSections }
-func (f Field) IsPeSectionEntropy() bool {
-	fld := string(f)
-	return strings.HasPrefix(fld, "pe.sections[") && strings.HasSuffix(fld, ".entropy")
-}
-func (f Field) IsPeSymbol() bool { return f == PeSymbols || f == PeNumSymbols || f == PeImports }
+func (f Field) IsPeSymbol() bool  { return f == PeSymbols || f == PeNumSymbols || f == PeImports }
 func (f Field) IsPeVersionResource() bool {
 	return f == PeCompany || f == PeCopyright || f == PeDescription || f == PeFileName || f == PeFileVersion || f == PeProduct || f == PeProductVersion || f == PePsChildFileName || f == PsChildPeFilename
 }
-func (f Field) IsPeImphash() bool   { return f == PeImphash }
-func (f Field) IsPeDotnet() bool    { return f == PeIsDotnet }
-func (f Field) IsPeAnomalies() bool { return f == PeAnomalies }
+func (f Field) IsPeVersionResources() bool { return f == PeResources }
+func (f Field) IsPeImphash() bool          { return f == PeImphash }
+func (f Field) IsPeDotnet() bool           { return f == PeIsDotnet }
+func (f Field) IsPeAnomalies() bool        { return f == PeAnomalies }
 func (f Field) IsPeSignature() bool {
 	return f == PeIsTrusted || f == PeIsSigned || f == PeCertIssuer || f == PeCertSerial || f == PeCertSubject || f == PeCertBefore || f == PeCertAfter
 }
@@ -537,393 +546,444 @@ func (f Field) IsImageCert() bool { return strings.HasPrefix(string(f), "image.c
 func (f Field) IsPeModified() bool { return f == PeIsModified }
 
 // Segment represents the type alias for the segment. Segment
-// denotes the location of the value within an indexed field.
+// denotes the property anchored to the bound field reference.
+// Let's look through an example. $module.name is the literal
+// composed of bound field ($module) and the segment (name).
+// Segments are most commonly used in the context of bound
+// variables in foreach function.
 type Segment string
 
 const (
-	// SectionEntropy is the entropy value of the specific PE section
-	SectionEntropy Segment = "entropy"
-	// SectionMD5Hash refers to the section md5 sum
-	SectionMD5Hash Segment = "md5"
-	// SectionSize is the section size
-	SectionSize Segment = "size"
+	PathSegment     Segment = "path"
+	NameSegment     Segment = "name"
+	TypeSegment     Segment = "type"
+	SizeSegment     Segment = "size"
+	ChecksumSegment Segment = "checksum"
+	AddressSegment  Segment = "address"
+	OffsetSegment   Segment = "offset"
+	EntropySegment  Segment = "entropy"
+	MD5Segment      Segment = "md5"
 
-	// ModuleSize is the module size
-	ModuleSize Segment = "size"
-	// ModuleChecksum is the module checksum
-	ModuleChecksum Segment = "checksum"
-	// ModuleLocation is the module location
-	ModuleLocation Segment = "location"
-	// ModuleBaseAddress is the module base address
-	ModuleBaseAddress Segment = "address.base"
-	// ModuleDefaultAddress is the module address
-	ModuleDefaultAddress Segment = "address.default"
+	PIDSegment       Segment = "pid"
+	CmdlineSegment   Segment = "cmdline"
+	ExeSegment       Segment = "exe"
+	ArgsSegment      Segment = "args"
+	CwdSegment       Segment = "cwd"
+	SIDSegment       Segment = "sid"
+	SessionIDSegment Segment = "sessionid"
+	UsernameSegment  Segment = "username"
+	DomainSegment    Segment = "domain"
 
-	// ProcessID represents the process id
-	ProcessID Segment = "pid"
-	// ProcessName represents the process name
-	ProcessName Segment = "name"
-	// ProcessCmdline represents the process command line
-	ProcessCmdline Segment = "cmdline"
-	// ProcessExe represents the process image path
-	ProcessExe Segment = "exe"
-	// ProcessArgs represents the process command line arguments
-	ProcessArgs Segment = "args"
-	// ProcessCwd represents the process current working directory
-	ProcessCwd Segment = "cwd"
-	// ProcessSID represents the process security identifier
-	ProcessSID Segment = "sid"
-	// ProcessSessionID represents the session id bound to the process
-	ProcessSessionID Segment = "sessionid"
+	TidSegment              Segment = "tid"
+	StartAddressSegment     Segment = "start_address"
+	UserStackBaseSegment    Segment = "user_stack_base"
+	UserStackLimitSegment   Segment = "user_stack_limit"
+	KernelStackBaseSegment  Segment = "kernel_stack_base"
+	KernelStackLimitSegment Segment = "kernel_stack_limit"
 
-	// FrameAddress represents the stack frame return address
-	FrameAddress Segment = "address"
-	// FrameSymbolOffset represents the symbol offset
-	FrameSymbolOffset Segment = "offset"
-	// FrameSymbol represents the symbol name
-	FrameSymbol Segment = "symbol"
-	// FrameModule represents the symbol module
-	FrameModule Segment = "module"
-	// FrameAllocationSize represents the frame region allocation size
-	FrameAllocationSize Segment = "allocation_size"
-	// FrameProtection represents the region page protection where the frame instruction lives
-	FrameProtection Segment = "protection"
-	// FrameIsUnbacked determines if the frame is unbacked
-	FrameIsUnbacked Segment = "is_unbacked"
-	// FrameCallsiteLeadingAssembly represents the leading callsite opcodes
-	FrameCallsiteLeadingAssembly = "callsite_leading_assembly"
-	// FrameCallsiteTrailingAssembly represents the trailing callsite opcodes
-	FrameCallsiteTrailingAssembly = "callsite_trailing_assembly"
+	SymbolSegment                   Segment = "symbol"
+	ModuleSegment                   Segment = "module"
+	AllocationSizeSegment           Segment = "allocation_size"
+	ProtectionSegment               Segment = "protection"
+	IsUnbackedSegment               Segment = "is_unbacked"
+	CallsiteLeadingAssemblySegment  Segment = "callsite_leading_assembly"
+	CallsiteTrailingAssemblySegment Segment = "callsite_trailing_assembly"
+
+	ModuleSignatureIsSignedSegment    Segment = "module.signature.is_signed"
+	ModuleSignatureIsTrustedSegment   Segment = "module.signature.is_trusted"
+	ModuleSignatureCertIssuerSegment  Segment = "module.signature.cert.issuer"
+	ModuleSignatureCertSubjectSegment Segment = "module.signature.cert.subject"
 )
 
-func (s Segment) IsSection() bool {
-	return s == SectionEntropy || s == SectionSize || s == SectionMD5Hash
-}
-func (s Segment) IsModule() bool {
-	return s == ModuleChecksum || s == ModuleLocation || s == ModuleBaseAddress || s == ModuleDefaultAddress || s == ModuleSize
-}
-func (s Segment) IsProcess() bool {
-	return s == ProcessID || s == ProcessName || s == ProcessCmdline || s == ProcessExe || s == ProcessArgs || s == ProcessCwd || s == ProcessSID || s == ProcessSessionID
-}
-func (s Segment) IsCallstack() bool {
-	return s == FrameAddress || s == FrameSymbolOffset || s == FrameSymbol || s == FrameModule || s == FrameAllocationSize || s == FrameProtection || s == FrameIsUnbacked || s == FrameCallsiteLeadingAssembly || s == FrameCallsiteTrailingAssembly
+var segments = map[Segment]bool{
+	NameSegment:                       true,
+	PathSegment:                       true,
+	TypeSegment:                       true,
+	EntropySegment:                    true,
+	SizeSegment:                       true,
+	MD5Segment:                        true,
+	AddressSegment:                    true,
+	ChecksumSegment:                   true,
+	PIDSegment:                        true,
+	CmdlineSegment:                    true,
+	ExeSegment:                        true,
+	ArgsSegment:                       true,
+	CwdSegment:                        true,
+	SIDSegment:                        true,
+	SessionIDSegment:                  true,
+	UsernameSegment:                   true,
+	DomainSegment:                     true,
+	TidSegment:                        true,
+	StartAddressSegment:               true,
+	UserStackBaseSegment:              true,
+	UserStackLimitSegment:             true,
+	KernelStackBaseSegment:            true,
+	KernelStackLimitSegment:           true,
+	OffsetSegment:                     true,
+	SymbolSegment:                     true,
+	ModuleSegment:                     true,
+	AllocationSizeSegment:             true,
+	ProtectionSegment:                 true,
+	IsUnbackedSegment:                 true,
+	CallsiteLeadingAssemblySegment:    true,
+	CallsiteTrailingAssemblySegment:   true,
+	ModuleSignatureIsSignedSegment:    true,
+	ModuleSignatureIsTrustedSegment:   true,
+	ModuleSignatureCertIssuerSegment:  true,
+	ModuleSignatureCertSubjectSegment: true,
 }
 
-func (f Field) IsEnvsMap() bool        { return strings.HasPrefix(f.String(), "ps.envs[") }
-func (f Field) IsModsMap() bool        { return strings.HasPrefix(f.String(), "ps.modules[") }
-func (f Field) IsAncestorMap() bool    { return strings.HasPrefix(f.String(), "ps.ancestor[") }
-func (f Field) IsPeSectionsMap() bool  { return strings.HasPrefix(f.String(), "pe.sections[") }
-func (f Field) IsPeResourcesMap() bool { return strings.HasPrefix(f.String(), "pe.resources[") }
-func (f Field) IsKevtArgMap() bool     { return strings.HasPrefix(f.String(), "kevt.arg[") }
-func (f Field) IsCallstackMap() bool   { return strings.HasPrefix(f.String(), "thread.callstack[") }
+var allowedSegments = map[Field][]Segment{
+	PsAncestors:     {NameSegment, PIDSegment, CmdlineSegment, ExeSegment, ArgsSegment, CwdSegment, SIDSegment, SessionIDSegment, UsernameSegment, DomainSegment},
+	PsThreads:       {TidSegment, StartAddressSegment, UserStackBaseSegment, UserStackLimitSegment, KernelStackBaseSegment, KernelStackLimitSegment},
+	PsModules:       {PathSegment, NameSegment, AddressSegment, SizeSegment, ChecksumSegment},
+	PsMmaps:         {AddressSegment, TypeSegment, AddressSegment, SizeSegment, ProtectionSegment, PathSegment},
+	PeSections:      {NameSegment, SizeSegment, EntropySegment, MD5Segment},
+	ThreadCallstack: {AddressSegment, OffsetSegment, SymbolSegment, ModuleSegment, AllocationSizeSegment, ProtectionSegment, IsUnbackedSegment, CallsiteLeadingAssemblySegment, CallsiteTrailingAssemblySegment, ModuleSignatureIsSignedSegment, ModuleSignatureIsTrustedSegment, ModuleSignatureCertIssuerSegment, ModuleSignatureCertSubjectSegment},
+}
+
+func (s Segment) IsEntropy() bool { return s == EntropySegment }
+
+// IsSegmentAllowed determines if the segment is valid for the pseudo field.
+func IsSegmentAllowed(f Field, s Segment) bool {
+	segs := allowedSegments[f]
+	if len(segs) == 0 {
+		return false
+	}
+
+	for _, seg := range segs {
+		if seg == s {
+			return true
+		}
+	}
+
+	return false
+}
+
+// SegmentsHint returns the sequence of available segments for the pseudo field.
+func SegmentsHint(f Field) string {
+	segs := allowedSegments[f]
+	if len(segs) == 0 {
+		return ""
+	}
+
+	s := make([]string, len(segs))
+	for i, seg := range segs {
+		s[i] = string(seg)
+	}
+
+	return strings.Join(s, ", ")
+}
+
+// IsSegment indicates if the given string is recognized as a known segment.
+func IsSegment(s string) bool {
+	return segments[Segment(s)]
+}
+
+// Pseudo fields provide access to the process/event internal state. They
+// are typically used in conjunction with the foreach function as its
+// first argument.
+
+var (
+	PsModules       Field = "ps._modules"
+	PsThreads       Field = "ps._threads"
+	PsMmaps         Field = "ps._mmaps"
+	PsAncestors     Field = "ps._ancestors"
+	ThreadCallstack Field = "thread._callstack"
+	PeSections      Field = "pe._sections"
+)
+
+func IsPseudoField(f Field) bool {
+	return f == PsAncestors || f == PsModules || f == PsThreads || f == PsMmaps || f == ThreadCallstack || f == PeSections
+}
+
+func (f Field) IsPeSectionsPseudo() bool { return f == PeSections }
 
 var fields = map[Field]FieldInfo{
-	KevtSeq:         {KevtSeq, "event sequence number", kparams.Uint64, []string{"kevt.seq > 666"}, nil},
-	KevtPID:         {KevtPID, "process identifier generating the kernel event", kparams.Uint32, []string{"kevt.pid = 6"}, nil},
-	KevtTID:         {KevtTID, "thread identifier generating the kernel event", kparams.Uint32, []string{"kevt.tid = 1024"}, nil},
-	KevtCPU:         {KevtCPU, "logical processor core where the event was generated", kparams.Uint8, []string{"kevt.cpu = 2"}, nil},
-	KevtName:        {KevtName, "symbolical kernel event name", kparams.AnsiString, []string{"kevt.name = 'CreateThread'"}, nil},
-	KevtCategory:    {KevtCategory, "event category", kparams.AnsiString, []string{"kevt.category = 'registry'"}, nil},
-	KevtDesc:        {KevtDesc, "event description", kparams.AnsiString, []string{"kevt.desc contains 'Creates a new process'"}, nil},
-	KevtHost:        {KevtHost, "host name on which the event was produced", kparams.UnicodeString, []string{"kevt.host contains 'kitty'"}, nil},
-	KevtTime:        {KevtTime, "event timestamp as a time string", kparams.Time, []string{"kevt.time = '17:05:32'"}, nil},
-	KevtTimeHour:    {KevtTimeHour, "hour within the day on which the event occurred", kparams.Time, []string{"kevt.time.h = 23"}, nil},
-	KevtTimeMin:     {KevtTimeMin, "minute offset within the hour on which the event occurred", kparams.Time, []string{"kevt.time.m = 54"}, nil},
-	KevtTimeSec:     {KevtTimeSec, "second offset within the minute  on which the event occurred", kparams.Time, []string{"kevt.time.s = 0"}, nil},
-	KevtTimeNs:      {KevtTimeNs, "nanoseconds specified by event timestamp", kparams.Int64, []string{"kevt.time.ns > 1591191629102337000"}, nil},
-	KevtDate:        {KevtDate, "event timestamp as a date string", kparams.Time, []string{"kevt.date = '2018-03-03'"}, nil},
-	KevtDateDay:     {KevtDateDay, "day of the month on which the event occurred", kparams.Time, []string{"kevt.date.d = 12"}, nil},
-	KevtDateMonth:   {KevtDateMonth, "month of the year on which the event occurred", kparams.Time, []string{"kevt.date.m = 11"}, nil},
-	KevtDateYear:    {KevtDateYear, "year on which the event occurred", kparams.Uint32, []string{"kevt.date.y = 2020"}, nil},
-	KevtDateTz:      {KevtDateTz, "time zone associated with the event timestamp", kparams.AnsiString, []string{"kevt.date.tz = 'UTC'"}, nil},
-	KevtDateWeek:    {KevtDateWeek, "week number within the year on which the event occurred", kparams.Uint8, []string{"kevt.date.week = 2"}, nil},
-	KevtDateWeekday: {KevtDateWeekday, "week day on which the event occurred", kparams.AnsiString, []string{"kevt.date.weekday = 'Monday'"}, nil},
-	KevtNparams:     {KevtNparams, "number of parameters", kparams.Int8, []string{"kevt.nparams > 2"}, nil},
+	KevtSeq:         {KevtSeq, "event sequence number", kparams.Uint64, []string{"kevt.seq > 666"}, nil, nil},
+	KevtPID:         {KevtPID, "process identifier generating the kernel event", kparams.Uint32, []string{"kevt.pid = 6"}, nil, nil},
+	KevtTID:         {KevtTID, "thread identifier generating the kernel event", kparams.Uint32, []string{"kevt.tid = 1024"}, nil, nil},
+	KevtCPU:         {KevtCPU, "logical processor core where the event was generated", kparams.Uint8, []string{"kevt.cpu = 2"}, nil, nil},
+	KevtName:        {KevtName, "symbolical kernel event name", kparams.AnsiString, []string{"kevt.name = 'CreateThread'"}, nil, nil},
+	KevtCategory:    {KevtCategory, "event category", kparams.AnsiString, []string{"kevt.category = 'registry'"}, nil, nil},
+	KevtDesc:        {KevtDesc, "event description", kparams.AnsiString, []string{"kevt.desc contains 'Creates a new process'"}, nil, nil},
+	KevtHost:        {KevtHost, "host name on which the event was produced", kparams.UnicodeString, []string{"kevt.host contains 'kitty'"}, nil, nil},
+	KevtTime:        {KevtTime, "event timestamp as a time string", kparams.Time, []string{"kevt.time = '17:05:32'"}, nil, nil},
+	KevtTimeHour:    {KevtTimeHour, "hour within the day on which the event occurred", kparams.Time, []string{"kevt.time.h = 23"}, nil, nil},
+	KevtTimeMin:     {KevtTimeMin, "minute offset within the hour on which the event occurred", kparams.Time, []string{"kevt.time.m = 54"}, nil, nil},
+	KevtTimeSec:     {KevtTimeSec, "second offset within the minute  on which the event occurred", kparams.Time, []string{"kevt.time.s = 0"}, nil, nil},
+	KevtTimeNs:      {KevtTimeNs, "nanoseconds specified by event timestamp", kparams.Int64, []string{"kevt.time.ns > 1591191629102337000"}, nil, nil},
+	KevtDate:        {KevtDate, "event timestamp as a date string", kparams.Time, []string{"kevt.date = '2018-03-03'"}, nil, nil},
+	KevtDateDay:     {KevtDateDay, "day of the month on which the event occurred", kparams.Time, []string{"kevt.date.d = 12"}, nil, nil},
+	KevtDateMonth:   {KevtDateMonth, "month of the year on which the event occurred", kparams.Time, []string{"kevt.date.m = 11"}, nil, nil},
+	KevtDateYear:    {KevtDateYear, "year on which the event occurred", kparams.Uint32, []string{"kevt.date.y = 2020"}, nil, nil},
+	KevtDateTz:      {KevtDateTz, "time zone associated with the event timestamp", kparams.AnsiString, []string{"kevt.date.tz = 'UTC'"}, nil, nil},
+	KevtDateWeek:    {KevtDateWeek, "week number within the year on which the event occurred", kparams.Uint8, []string{"kevt.date.week = 2"}, nil, nil},
+	KevtDateWeekday: {KevtDateWeekday, "week day on which the event occurred", kparams.AnsiString, []string{"kevt.date.weekday = 'Monday'"}, nil, nil},
+	KevtNparams:     {KevtNparams, "number of parameters", kparams.Int8, []string{"kevt.nparams > 2"}, nil, nil},
+	KevtArg: {KevtArg, "event parameter", kparams.Object, []string{"kevt.arg[cmdline] istartswith 'C:\\Windows'"}, nil, &Argument{Optional: false, Pattern: "[a-z0-9_]+", ValidationFunc: func(s string) bool {
+		for _, c := range s {
+			switch {
+			case unicode.IsLower(c):
+			case unicode.IsNumber(c):
+			case c == '_':
+			default:
+				return false
+			}
+		}
+		return true
+	}}},
 
-	PsPid:                    {PsPid, "process identifier", kparams.PID, []string{"ps.pid = 1024"}, nil},
-	PsPpid:                   {PsPpid, "parent process identifier", kparams.PID, []string{"ps.ppid = 45"}, nil},
-	PsName:                   {PsName, "process image name including the file extension", kparams.UnicodeString, []string{"ps.name contains 'firefox'"}, nil},
-	PsComm:                   {PsComm, "process command line", kparams.UnicodeString, []string{"ps.comm contains 'java'"}, &Deprecation{Since: "1.10.0", Fields: []Field{PsCmdline}}},
-	PsCmdline:                {PsCmdline, "process command line", kparams.UnicodeString, []string{"ps.cmdline contains 'java'"}, nil},
-	PsExe:                    {PsExe, "full name of the process' executable", kparams.UnicodeString, []string{"ps.exe = 'C:\\Windows\\system32\\cmd.exe'"}, nil},
-	PsArgs:                   {PsArgs, "process command line arguments", kparams.Slice, []string{"ps.args in ('/cdir', '/-C')"}, nil},
-	PsCwd:                    {PsCwd, "process current working directory", kparams.UnicodeString, []string{"ps.cwd = 'C:\\Users\\Default'"}, nil},
-	PsSID:                    {PsSID, "security identifier under which this process is run", kparams.UnicodeString, []string{"ps.sid contains 'SYSTEM'"}, nil},
-	PsSessionID:              {PsSessionID, "unique identifier for the current session", kparams.Int16, []string{"ps.sessionid = 1"}, nil},
-	PsDomain:                 {PsDomain, "process domain", kparams.UnicodeString, []string{"ps.domain contains 'SERVICE'"}, nil},
-	PsUsername:               {PsUsername, "process username", kparams.UnicodeString, []string{"ps.username contains 'system'"}, nil},
-	PsEnvs:                   {PsEnvs, "process environment variables", kparams.Slice, []string{"ps.envs in ('MOZ_CRASHREPORTER_DATA_DIRECTORY')"}, nil},
-	PsHandles:                {PsHandles, "allocated process handle names", kparams.Slice, []string{"ps.handles in ('\\BaseNamedObjects\\__ComCatalogCache__')"}, nil},
-	PsHandleTypes:            {PsHandleTypes, "allocated process handle types", kparams.Slice, []string{"ps.handle.types in ('Key', 'Mutant', 'Section')"}, nil},
-	PsDTB:                    {PsDTB, "process directory table base address", kparams.Address, []string{"ps.dtb = '7ffe0000'"}, nil},
-	PsModules:                {PsModules, "modules loaded by the process", kparams.Slice, []string{"ps.modules in ('crypt32.dll', 'xul.dll')"}, nil},
-	PsParentName:             {PsParentName, "parent process image name including the file extension", kparams.UnicodeString, []string{"ps.parent.name contains 'cmd.exe'"}, nil},
-	PsParentPid:              {PsParentPid, "parent process id", kparams.Uint32, []string{"ps.parent.pid = 4"}, nil},
-	PsParentComm:             {PsParentComm, "parent process command line", kparams.UnicodeString, []string{"ps.parent.comm contains 'java'"}, &Deprecation{Since: "1.10.0", Fields: []Field{PsParentCmdline}}},
-	PsParentCmdline:          {PsParentCmdline, "parent process command line", kparams.UnicodeString, []string{"ps.parent.cmdline contains 'java'"}, nil},
-	PsParentExe:              {PsParentExe, "full name of the parent process' executable", kparams.UnicodeString, []string{"ps.parent.exe = 'C:\\Windows\\system32\\explorer.exe'"}, nil},
-	PsParentArgs:             {PsParentArgs, "parent process command line arguments", kparams.Slice, []string{"ps.parent.args in ('/cdir', '/-C')"}, nil},
-	PsParentCwd:              {PsParentCwd, "parent process current working directory", kparams.UnicodeString, []string{"ps.parent.cwd = 'C:\\Temp'"}, nil},
-	PsParentSID:              {PsParentSID, "security identifier under which the parent process is run", kparams.UnicodeString, []string{"ps.parent.sid contains 'SYSTEM'"}, nil},
-	PsParentDomain:           {PsParentDomain, "parent process domain", kparams.UnicodeString, []string{"ps.parent.domain contains 'SERVICE'"}, nil},
-	PsParentUsername:         {PsParentUsername, "parent process username", kparams.UnicodeString, []string{"ps.parent.username contains 'system'"}, nil},
-	PsParentSessionID:        {PsParentSessionID, "unique identifier for the current session of parent process", kparams.Int16, []string{"ps.parent.sessionid = 1"}, nil},
-	PsParentEnvs:             {PsParentEnvs, "parent process environment variables", kparams.Slice, []string{"ps.parent.envs in ('MOZ_CRASHREPORTER_DATA_DIRECTORY')"}, nil},
-	PsParentHandles:          {PsParentHandles, "allocated parent process handle names", kparams.Slice, []string{"ps.parent.handles in ('\\BaseNamedObjects\\__ComCatalogCache__')"}, nil},
-	PsParentHandleTypes:      {PsParentHandleTypes, "allocated parent process handle types", kparams.Slice, []string{"ps.parent.handle.types in ('File', 'SymbolicLink')"}, nil},
-	PsParentDTB:              {PsParentDTB, "parent process directory table base address", kparams.Address, []string{"ps.parent.dtb = '7ffe0000'"}, nil},
-	PsAccessMask:             {PsAccessMask, "process desired access rights", kparams.AnsiString, []string{"ps.access.mask = '0x1400'"}, nil},
-	PsAccessMaskNames:        {PsAccessMaskNames, "process desired access rights as a string list", kparams.Slice, []string{"ps.access.mask.names in ('SUSPEND_RESUME')"}, nil},
-	PsAccessStatus:           {PsAccessStatus, "process access status", kparams.UnicodeString, []string{"ps.access.status = 'access is denied.'"}, nil},
-	PsSiblingPid:             {PsSiblingPid, "created or terminated process identifier", kparams.PID, []string{"ps.sibling.pid = 320"}, &Deprecation{Since: "1.10.0", Fields: []Field{PsChildPid}}},
-	PsChildPid:               {PsChildPid, "created or terminated process identifier", kparams.PID, []string{"ps.child.pid = 320"}, nil},
-	PsSiblingName:            {PsSiblingName, "created or terminated process name", kparams.UnicodeString, []string{"ps.sibling.name = 'notepad.exe'"}, &Deprecation{Since: "1.10.0", Fields: []Field{PsChildName}}},
-	PsChildName:              {PsChildName, "created or terminated process name", kparams.UnicodeString, []string{"ps.child.name = 'notepad.exe'"}, nil},
-	PsSiblingComm:            {PsSiblingComm, "created or terminated process command line", kparams.UnicodeString, []string{"ps.sibling.comm contains '\\k \\v'"}, &Deprecation{Since: "1.10.0", Fields: []Field{PsChildCmdline}}},
-	PsChildCmdline:           {PsChildCmdline, "created or terminated process command line", kparams.UnicodeString, []string{"ps.child.cmdline contains '\\k \\v'"}, nil},
-	PsSiblingArgs:            {PsSiblingArgs, "created process command line arguments", kparams.Slice, []string{"ps.sibling.args in ('/cdir', '/-C')"}, &Deprecation{Since: "1.10.0", Fields: []Field{PsChildArgs}}},
-	PsChildArgs:              {PsChildArgs, "created process command line arguments", kparams.Slice, []string{"ps.child.args in ('/cdir', '/-C')"}, nil},
-	PsSiblingExe:             {PsSiblingExe, "created, terminated, or opened process id", kparams.UnicodeString, []string{"ps.sibling.exe contains '\\Windows\\cmd.exe'"}, &Deprecation{Since: "1.10.0", Fields: []Field{PsChildExe}}},
-	PsChildExe:               {PsChildExe, "created, terminated, or opened process id", kparams.UnicodeString, []string{"ps.child.exe contains '\\Windows\\cmd.exe'"}, nil},
-	PsSiblingSID:             {PsSiblingSID, "created or terminated process security identifier", kparams.UnicodeString, []string{"ps.sibling.sid contains 'SERVICE'"}, &Deprecation{Since: "1.10.0", Fields: []Field{PsChildSID}}},
-	PsChildSID:               {PsChildSID, "created or terminated process security identifier", kparams.UnicodeString, []string{"ps.child.sid contains 'SERVICE'"}, nil},
-	PsSiblingSessionID:       {PsSiblingSessionID, "created or terminated process session identifier", kparams.Int16, []string{"ps.sibling.sessionid == 1"}, &Deprecation{Since: "1.10.0", Fields: []Field{PsChildSessionID}}},
-	PsChildSessionID:         {PsChildSessionID, "created or terminated process session identifier", kparams.Int16, []string{"ps.child.sessionid == 1"}, nil},
-	PsSiblingDomain:          {PsSiblingDomain, "created or terminated process domain", kparams.UnicodeString, []string{"ps.sibling.domain contains 'SERVICE'"}, &Deprecation{Since: "1.10.0", Fields: []Field{PsChildDomain}}},
-	PsChildDomain:            {PsChildDomain, "created or terminated process domain", kparams.UnicodeString, []string{"ps.child.domain contains 'SERVICE'"}, nil},
-	PsSiblingUsername:        {PsSiblingUsername, "created or terminated process username", kparams.UnicodeString, []string{"ps.sibling.username contains 'system'"}, &Deprecation{Since: "1.10.0", Fields: []Field{PsChildUsername}}},
-	PsChildUsername:          {PsChildUsername, "created or terminated process username", kparams.UnicodeString, []string{"ps.child.username contains 'system'"}, nil},
-	PsUUID:                   {PsUUID, "unique process identifier", kparams.Uint64, []string{"ps.uuid > 6000054355"}, nil},
-	PsParentUUID:             {PsParentUUID, "unique parent process identifier", kparams.Uint64, []string{"ps.parent.uuid > 6000054355"}, nil},
-	PsChildUUID:              {PsChildUUID, "unique child process identifier", kparams.Uint64, []string{"ps.child.uuid > 6000054355"}, nil},
-	PsChildPeFilename:        {PsChildPeFilename, "original file name of the child process executable supplied at compile-time", kparams.UnicodeString, []string{"ps.child.pe.file.name = 'NOTEPAD.EXE'"}, nil},
-	PsChildIsWOW64Field:      {PsChildIsWOW64Field, "indicates if the 32-bit child process is created in 64-bit Windows system", kparams.Bool, []string{"ps.child.is_wow64"}, nil},
-	PsChildIsPackagedField:   {PsChildIsPackagedField, "indicates if the child process is packaged with the MSIX technology", kparams.Bool, []string{"ps.child.is_packaged"}, nil},
-	PsChildIsProtectedField:  {PsChildIsProtectedField, "indicates if the child process is a protected process", kparams.Bool, []string{"ps.child.is_protected"}, nil},
-	PsIsWOW64Field:           {PsIsWOW64Field, "indicates if the process generating the event is a 32-bit process created in 64-bit Windows system", kparams.Bool, []string{"ps.is_wow64"}, nil},
-	PsIsPackagedField:        {PsIsPackagedField, "indicates if the process generating the event is packaged with the MSIX technology", kparams.Bool, []string{"ps.is_packaged"}, nil},
-	PsIsProtectedField:       {PsIsProtectedField, "indicates if the process generating the event is a protected process", kparams.Bool, []string{"ps.is_protected"}, nil},
-	PsParentIsWOW64Field:     {PsParentIsWOW64Field, "indicates if the parent process generating the event is a 32-bit process created in 64-bit Windows system", kparams.Bool, []string{"ps.parent.is_wow64"}, nil},
-	PsParentIsPackagedField:  {PsParentIsPackagedField, "indicates if the parent process generating the event is packaged with the MSIX technology", kparams.Bool, []string{"ps.parent.is_packaged"}, nil},
-	PsParentIsProtectedField: {PsParentIsProtectedField, "indicates if the the parent process generating the event is a protected process", kparams.Bool, []string{"ps.parent.is_protected"}, nil},
+	PsPid:                    {PsPid, "process identifier", kparams.PID, []string{"ps.pid = 1024"}, nil, nil},
+	PsPpid:                   {PsPpid, "parent process identifier", kparams.PID, []string{"ps.ppid = 45"}, nil, nil},
+	PsName:                   {PsName, "process image name including the file extension", kparams.UnicodeString, []string{"ps.name contains 'firefox'"}, nil, nil},
+	PsComm:                   {PsComm, "process command line", kparams.UnicodeString, []string{"ps.comm contains 'java'"}, &Deprecation{Since: "1.10.0", Fields: []Field{PsCmdline}}, nil},
+	PsCmdline:                {PsCmdline, "process command line", kparams.UnicodeString, []string{"ps.cmdline contains 'java'"}, nil, nil},
+	PsExe:                    {PsExe, "full name of the process' executable", kparams.UnicodeString, []string{"ps.exe = 'C:\\Windows\\system32\\cmd.exe'"}, nil, nil},
+	PsArgs:                   {PsArgs, "process command line arguments", kparams.Slice, []string{"ps.args in ('/cdir', '/-C')"}, nil, nil},
+	PsCwd:                    {PsCwd, "process current working directory", kparams.UnicodeString, []string{"ps.cwd = 'C:\\Users\\Default'"}, nil, nil},
+	PsSID:                    {PsSID, "security identifier under which this process is run", kparams.UnicodeString, []string{"ps.sid contains 'SYSTEM'"}, nil, nil},
+	PsSessionID:              {PsSessionID, "unique identifier for the current session", kparams.Int16, []string{"ps.sessionid = 1"}, nil, nil},
+	PsDomain:                 {PsDomain, "process domain", kparams.UnicodeString, []string{"ps.domain contains 'SERVICE'"}, nil, nil},
+	PsUsername:               {PsUsername, "process username", kparams.UnicodeString, []string{"ps.username contains 'system'"}, nil, nil},
+	PsEnvs:                   {PsEnvs, "process environment variables", kparams.Slice, []string{"ps.envs in ('SystemRoot:C:\\WINDOWS')", "ps.envs[windir] = 'C:\\WINDOWS'"}, nil, &Argument{Optional: true, ValidationFunc: func(arg string) bool { return true }}},
+	PsHandleNames:            {PsHandleNames, "allocated process handle names", kparams.Slice, []string{"ps.handles in ('\\BaseNamedObjects\\__ComCatalogCache__')"}, nil, nil},
+	PsHandleTypes:            {PsHandleTypes, "allocated process handle types", kparams.Slice, []string{"ps.handle.types in ('Key', 'Mutant', 'Section')"}, nil, nil},
+	PsDTB:                    {PsDTB, "process directory table base address", kparams.Address, []string{"ps.dtb = '7ffe0000'"}, nil, nil},
+	PsModuleNames:            {PsModuleNames, "modules loaded by the process", kparams.Slice, []string{"ps.modules in ('crypt32.dll', 'xul.dll')"}, nil, nil},
+	PsParentName:             {PsParentName, "parent process image name including the file extension", kparams.UnicodeString, []string{"ps.parent.name contains 'cmd.exe'"}, nil, nil},
+	PsParentPid:              {PsParentPid, "parent process id", kparams.Uint32, []string{"ps.parent.pid = 4"}, nil, nil},
+	PsParentComm:             {PsParentComm, "parent process command line", kparams.UnicodeString, []string{"ps.parent.comm contains 'java'"}, &Deprecation{Since: "1.10.0", Fields: []Field{PsParentCmdline}}, nil},
+	PsParentCmdline:          {PsParentCmdline, "parent process command line", kparams.UnicodeString, []string{"ps.parent.cmdline contains 'java'"}, nil, nil},
+	PsParentExe:              {PsParentExe, "full name of the parent process' executable", kparams.UnicodeString, []string{"ps.parent.exe = 'C:\\Windows\\system32\\explorer.exe'"}, nil, nil},
+	PsParentArgs:             {PsParentArgs, "parent process command line arguments", kparams.Slice, []string{"ps.parent.args in ('/cdir', '/-C')"}, nil, nil},
+	PsParentCwd:              {PsParentCwd, "parent process current working directory", kparams.UnicodeString, []string{"ps.parent.cwd = 'C:\\Temp'"}, nil, nil},
+	PsParentSID:              {PsParentSID, "security identifier under which the parent process is run", kparams.UnicodeString, []string{"ps.parent.sid contains 'SYSTEM'"}, nil, nil},
+	PsParentDomain:           {PsParentDomain, "parent process domain", kparams.UnicodeString, []string{"ps.parent.domain contains 'SERVICE'"}, nil, nil},
+	PsParentUsername:         {PsParentUsername, "parent process username", kparams.UnicodeString, []string{"ps.parent.username contains 'system'"}, nil, nil},
+	PsParentSessionID:        {PsParentSessionID, "unique identifier for the current session of parent process", kparams.Int16, []string{"ps.parent.sessionid = 1"}, nil, nil},
+	PsParentEnvs:             {PsParentEnvs, "parent process environment variables", kparams.Slice, []string{"ps.parent.envs in ('MOZ_CRASHREPORTER_DATA_DIRECTORY')"}, nil, nil},
+	PsParentHandles:          {PsParentHandles, "allocated parent process handle names", kparams.Slice, []string{"ps.parent.handles in ('\\BaseNamedObjects\\__ComCatalogCache__')"}, nil, nil},
+	PsParentHandleTypes:      {PsParentHandleTypes, "allocated parent process handle types", kparams.Slice, []string{"ps.parent.handle.types in ('File', 'SymbolicLink')"}, nil, nil},
+	PsParentDTB:              {PsParentDTB, "parent process directory table base address", kparams.Address, []string{"ps.parent.dtb = '7ffe0000'"}, nil, nil},
+	PsAccessMask:             {PsAccessMask, "process desired access rights", kparams.AnsiString, []string{"ps.access.mask = '0x1400'"}, nil, nil},
+	PsAccessMaskNames:        {PsAccessMaskNames, "process desired access rights as a string list", kparams.Slice, []string{"ps.access.mask.names in ('SUSPEND_RESUME')"}, nil, nil},
+	PsAccessStatus:           {PsAccessStatus, "process access status", kparams.UnicodeString, []string{"ps.access.status = 'access is denied.'"}, nil, nil},
+	PsSiblingPid:             {PsSiblingPid, "created or terminated process identifier", kparams.PID, []string{"ps.sibling.pid = 320"}, &Deprecation{Since: "1.10.0", Fields: []Field{PsChildPid}}, nil},
+	PsChildPid:               {PsChildPid, "created or terminated process identifier", kparams.PID, []string{"ps.child.pid = 320"}, nil, nil},
+	PsSiblingName:            {PsSiblingName, "created or terminated process name", kparams.UnicodeString, []string{"ps.sibling.name = 'notepad.exe'"}, &Deprecation{Since: "1.10.0", Fields: []Field{PsChildName}}, nil},
+	PsChildName:              {PsChildName, "created or terminated process name", kparams.UnicodeString, []string{"ps.child.name = 'notepad.exe'"}, nil, nil},
+	PsSiblingComm:            {PsSiblingComm, "created or terminated process command line", kparams.UnicodeString, []string{"ps.sibling.comm contains '\\k \\v'"}, &Deprecation{Since: "1.10.0", Fields: []Field{PsChildCmdline}}, nil},
+	PsChildCmdline:           {PsChildCmdline, "created or terminated process command line", kparams.UnicodeString, []string{"ps.child.cmdline contains '\\k \\v'"}, nil, nil},
+	PsSiblingArgs:            {PsSiblingArgs, "created process command line arguments", kparams.Slice, []string{"ps.sibling.args in ('/cdir', '/-C')"}, &Deprecation{Since: "1.10.0", Fields: []Field{PsChildArgs}}, nil},
+	PsChildArgs:              {PsChildArgs, "created process command line arguments", kparams.Slice, []string{"ps.child.args in ('/cdir', '/-C')"}, nil, nil},
+	PsSiblingExe:             {PsSiblingExe, "created, terminated, or opened process id", kparams.UnicodeString, []string{"ps.sibling.exe contains '\\Windows\\cmd.exe'"}, &Deprecation{Since: "1.10.0", Fields: []Field{PsChildExe}}, nil},
+	PsChildExe:               {PsChildExe, "created, terminated, or opened process id", kparams.UnicodeString, []string{"ps.child.exe contains '\\Windows\\cmd.exe'"}, nil, nil},
+	PsSiblingSID:             {PsSiblingSID, "created or terminated process security identifier", kparams.UnicodeString, []string{"ps.sibling.sid contains 'SERVICE'"}, &Deprecation{Since: "1.10.0", Fields: []Field{PsChildSID}}, nil},
+	PsChildSID:               {PsChildSID, "created or terminated process security identifier", kparams.UnicodeString, []string{"ps.child.sid contains 'SERVICE'"}, nil, nil},
+	PsSiblingSessionID:       {PsSiblingSessionID, "created or terminated process session identifier", kparams.Int16, []string{"ps.sibling.sessionid == 1"}, &Deprecation{Since: "1.10.0", Fields: []Field{PsChildSessionID}}, nil},
+	PsChildSessionID:         {PsChildSessionID, "created or terminated process session identifier", kparams.Int16, []string{"ps.child.sessionid == 1"}, nil, nil},
+	PsSiblingDomain:          {PsSiblingDomain, "created or terminated process domain", kparams.UnicodeString, []string{"ps.sibling.domain contains 'SERVICE'"}, &Deprecation{Since: "1.10.0", Fields: []Field{PsChildDomain}}, nil},
+	PsChildDomain:            {PsChildDomain, "created or terminated process domain", kparams.UnicodeString, []string{"ps.child.domain contains 'SERVICE'"}, nil, nil},
+	PsSiblingUsername:        {PsSiblingUsername, "created or terminated process username", kparams.UnicodeString, []string{"ps.sibling.username contains 'system'"}, &Deprecation{Since: "1.10.0", Fields: []Field{PsChildUsername}}, nil},
+	PsChildUsername:          {PsChildUsername, "created or terminated process username", kparams.UnicodeString, []string{"ps.child.username contains 'system'"}, nil, nil},
+	PsUUID:                   {PsUUID, "unique process identifier", kparams.Uint64, []string{"ps.uuid > 6000054355"}, nil, nil},
+	PsParentUUID:             {PsParentUUID, "unique parent process identifier", kparams.Uint64, []string{"ps.parent.uuid > 6000054355"}, nil, nil},
+	PsChildUUID:              {PsChildUUID, "unique child process identifier", kparams.Uint64, []string{"ps.child.uuid > 6000054355"}, nil, nil},
+	PsChildPeFilename:        {PsChildPeFilename, "original file name of the child process executable supplied at compile-time", kparams.UnicodeString, []string{"ps.child.pe.file.name = 'NOTEPAD.EXE'"}, nil, nil},
+	PsChildIsWOW64Field:      {PsChildIsWOW64Field, "indicates if the 32-bit child process is created in 64-bit Windows system", kparams.Bool, []string{"ps.child.is_wow64"}, nil, nil},
+	PsChildIsPackagedField:   {PsChildIsPackagedField, "indicates if the child process is packaged with the MSIX technology", kparams.Bool, []string{"ps.child.is_packaged"}, nil, nil},
+	PsChildIsProtectedField:  {PsChildIsProtectedField, "indicates if the child process is a protected process", kparams.Bool, []string{"ps.child.is_protected"}, nil, nil},
+	PsIsWOW64Field:           {PsIsWOW64Field, "indicates if the process generating the event is a 32-bit process created in 64-bit Windows system", kparams.Bool, []string{"ps.is_wow64"}, nil, nil},
+	PsIsPackagedField:        {PsIsPackagedField, "indicates if the process generating the event is packaged with the MSIX technology", kparams.Bool, []string{"ps.is_packaged"}, nil, nil},
+	PsIsProtectedField:       {PsIsProtectedField, "indicates if the process generating the event is a protected process", kparams.Bool, []string{"ps.is_protected"}, nil, nil},
+	PsParentIsWOW64Field:     {PsParentIsWOW64Field, "indicates if the parent process generating the event is a 32-bit process created in 64-bit Windows system", kparams.Bool, []string{"ps.parent.is_wow64"}, nil, nil},
+	PsParentIsPackagedField:  {PsParentIsPackagedField, "indicates if the parent process generating the event is packaged with the MSIX technology", kparams.Bool, []string{"ps.parent.is_packaged"}, nil, nil},
+	PsParentIsProtectedField: {PsParentIsProtectedField, "indicates if the the parent process generating the event is a protected process", kparams.Bool, []string{"ps.parent.is_protected"}, nil, nil},
+	PsAncestor:               {PsAncestor, "the process ancestor name", kparams.UnicodeString, []string{"ps.ancestor[1] = 'svchost.exe'", "ps.ancestor in ('winword.exe')"}, nil, &Argument{Optional: true, Pattern: "[0-9]+", ValidationFunc: isNumber}},
 
-	ThreadBasePrio:                          {ThreadBasePrio, "scheduler priority of the thread", kparams.Int8, []string{"thread.prio = 5"}, nil},
-	ThreadIOPrio:                            {ThreadIOPrio, "I/O priority hint for scheduling I/O operations", kparams.Int8, []string{"thread.io.prio = 4"}, nil},
-	ThreadPagePrio:                          {ThreadPagePrio, "memory page priority hint for memory pages accessed by the thread", kparams.Int8, []string{"thread.page.prio = 12"}, nil},
-	ThreadKstackBase:                        {ThreadKstackBase, "base address of the thread's kernel space stack", kparams.Address, []string{"thread.kstack.base = 'a65d800000'"}, nil},
-	ThreadKstackLimit:                       {ThreadKstackLimit, "limit of the thread's kernel space stack", kparams.Address, []string{"thread.kstack.limit = 'a85d800000'"}, nil},
-	ThreadUstackBase:                        {ThreadUstackBase, "base address of the thread's user space stack", kparams.Address, []string{"thread.ustack.base = '7ffe0000'"}, nil},
-	ThreadUstackLimit:                       {ThreadUstackLimit, "limit of the thread's user space stack", kparams.Address, []string{"thread.ustack.limit = '8ffe0000'"}, nil},
-	ThreadEntrypoint:                        {ThreadEntrypoint, "starting address of the function to be executed by the thread", kparams.Address, []string{"thread.entrypoint = '7efe0000'"}, &Deprecation{Since: "2.3.0", Fields: []Field{ThreadStartAddress}}},
-	ThreadStartAddress:                      {ThreadStartAddress, "thread start address", kparams.Address, []string{"thread.start_address = '7efe0000'"}, nil},
-	ThreadPID:                               {ThreadPID, "the process identifier where the thread is created", kparams.Uint32, []string{"kevt.pid != thread.pid"}, nil},
-	ThreadTEB:                               {ThreadTEB, "the base address of the thread environment block", kparams.Address, []string{"thread.teb_address = '8f30893000'"}, nil},
-	ThreadAccessMask:                        {ThreadAccessMask, "thread desired access rights", kparams.AnsiString, []string{"thread.access.mask = '0x1fffff'"}, nil},
-	ThreadAccessMaskNames:                   {ThreadAccessMaskNames, "thread desired access rights as a string list", kparams.Slice, []string{"thread.access.mask.names in ('IMPERSONATE')"}, nil},
-	ThreadAccessStatus:                      {ThreadAccessStatus, "thread access status", kparams.UnicodeString, []string{"thread.access.status = 'success'"}, nil},
-	ThreadCallstackSummary:                  {ThreadCallstackSummary, "callstack summary", kparams.UnicodeString, []string{"thread.callstack.summary contains 'ntdll.dll|KERNELBASE.dll'"}, nil},
-	ThreadCallstackDetail:                   {ThreadCallstackDetail, "detailed information of each stack frame", kparams.UnicodeString, []string{"thread.callstack.detail contains 'KERNELBASE.dll!CreateProcessW'"}, nil},
-	ThreadCallstackModules:                  {ThreadCallstackModules, "list of modules comprising the callstack", kparams.Slice, []string{"thread.callstack.modules in ('C:\\WINDOWS\\System32\\KERNELBASE.dll')"}, nil},
-	ThreadCallstackSymbols:                  {ThreadCallstackSymbols, "list of symbols comprising the callstack", kparams.Slice, []string{"thread.callstack.symbols in ('ntdll.dll!NtCreateProcess')"}, nil},
-	ThreadCallstackAllocationSizes:          {ThreadCallstackAllocationSizes, "allocation sizes of private pages", kparams.Slice, []string{"thread.callstack.allocation_sizes > 10000"}, nil},
-	ThreadCallstackProtections:              {ThreadCallstackProtections, "page protections masks of each frame", kparams.Slice, []string{"thread.callstack.protections in ('RWX', 'WX')"}, nil},
-	ThreadCallstackCallsiteLeadingAssembly:  {ThreadCallstackCallsiteLeadingAssembly, "callsite leading assembly instructions", kparams.Slice, []string{"thread.callstack.callsite_leading_assembly in ('mov r10,rcx', 'syscall')"}, nil},
-	ThreadCallstackCallsiteTrailingAssembly: {ThreadCallstackCallsiteTrailingAssembly, "callsite trailing assembly instructions", kparams.Slice, []string{"thread.callstack.callsite_trailing_assembly in ('add esp, 0xab')"}, nil},
-	ThreadCallstackIsUnbacked:               {ThreadCallstackIsUnbacked, "indicates if the callstack contains unbacked regions", kparams.Bool, []string{"thread.callstack.is_unbacked"}, nil},
+	ThreadBasePrio:                                     {ThreadBasePrio, "scheduler priority of the thread", kparams.Int8, []string{"thread.prio = 5"}, nil, nil},
+	ThreadIOPrio:                                       {ThreadIOPrio, "I/O priority hint for scheduling I/O operations", kparams.Int8, []string{"thread.io.prio = 4"}, nil, nil},
+	ThreadPagePrio:                                     {ThreadPagePrio, "memory page priority hint for memory pages accessed by the thread", kparams.Int8, []string{"thread.page.prio = 12"}, nil, nil},
+	ThreadKstackBase:                                   {ThreadKstackBase, "base address of the thread's kernel space stack", kparams.Address, []string{"thread.kstack.base = 'a65d800000'"}, nil, nil},
+	ThreadKstackLimit:                                  {ThreadKstackLimit, "limit of the thread's kernel space stack", kparams.Address, []string{"thread.kstack.limit = 'a85d800000'"}, nil, nil},
+	ThreadUstackBase:                                   {ThreadUstackBase, "base address of the thread's user space stack", kparams.Address, []string{"thread.ustack.base = '7ffe0000'"}, nil, nil},
+	ThreadUstackLimit:                                  {ThreadUstackLimit, "limit of the thread's user space stack", kparams.Address, []string{"thread.ustack.limit = '8ffe0000'"}, nil, nil},
+	ThreadEntrypoint:                                   {ThreadEntrypoint, "starting address of the function to be executed by the thread", kparams.Address, []string{"thread.entrypoint = '7efe0000'"}, &Deprecation{Since: "2.3.0", Fields: []Field{ThreadStartAddress}}, nil},
+	ThreadStartAddress:                                 {ThreadStartAddress, "thread start address", kparams.Address, []string{"thread.start_address = '7efe0000'"}, nil, nil},
+	ThreadStartAddressSymbol:                           {ThreadStartAddressSymbol, "thread start address symbol", kparams.UnicodeString, []string{"thread.start_address.symbol = 'LoadImage'"}, nil, nil},
+	ThreadStartAddressModule:                           {ThreadStartAddressModule, "thread start address module", kparams.UnicodeString, []string{"thread.start_address.module endswith 'kernel32.dll'"}, nil, nil},
+	ThreadPID:                                          {ThreadPID, "the process identifier where the thread is created", kparams.Uint32, []string{"kevt.pid != thread.pid"}, nil, nil},
+	ThreadTEB:                                          {ThreadTEB, "the base address of the thread environment block", kparams.Address, []string{"thread.teb_address = '8f30893000'"}, nil, nil},
+	ThreadAccessMask:                                   {ThreadAccessMask, "thread desired access rights", kparams.AnsiString, []string{"thread.access.mask = '0x1fffff'"}, nil, nil},
+	ThreadAccessMaskNames:                              {ThreadAccessMaskNames, "thread desired access rights as a string list", kparams.Slice, []string{"thread.access.mask.names in ('IMPERSONATE')"}, nil, nil},
+	ThreadAccessStatus:                                 {ThreadAccessStatus, "thread access status", kparams.UnicodeString, []string{"thread.access.status = 'success'"}, nil, nil},
+	ThreadCallstackSummary:                             {ThreadCallstackSummary, "callstack summary", kparams.UnicodeString, []string{"thread.callstack.summary contains 'ntdll.dll|KERNELBASE.dll'"}, nil, nil},
+	ThreadCallstackDetail:                              {ThreadCallstackDetail, "detailed information of each stack frame", kparams.UnicodeString, []string{"thread.callstack.detail contains 'KERNELBASE.dll!CreateProcessW'"}, nil, nil},
+	ThreadCallstackModules:                             {ThreadCallstackModules, "list of modules comprising the callstack", kparams.Slice, []string{"thread.callstack.modules in ('C:\\WINDOWS\\System32\\KERNELBASE.dll')", "base(thread.callstack.modules[7]) = 'ntdll.dll'"}, nil, &Argument{Optional: true, Pattern: "[0-9]+", ValidationFunc: isNumber}},
+	ThreadCallstackSymbols:                             {ThreadCallstackSymbols, "list of symbols comprising the callstack", kparams.Slice, []string{"thread.callstack.symbols in ('ntdll.dll!NtCreateProcess')", "thread.callstack.symbols[3] = 'ntdll!NtCreateProcess'"}, nil, &Argument{Optional: true, Pattern: "[0-9]+", ValidationFunc: isNumber}},
+	ThreadCallstackAllocationSizes:                     {ThreadCallstackAllocationSizes, "allocation sizes of private pages", kparams.Slice, []string{"thread.callstack.allocation_sizes > 10000"}, nil, nil},
+	ThreadCallstackProtections:                         {ThreadCallstackProtections, "page protections masks of each frame", kparams.Slice, []string{"thread.callstack.protections in ('RWX', 'WX')"}, nil, nil},
+	ThreadCallstackCallsiteLeadingAssembly:             {ThreadCallstackCallsiteLeadingAssembly, "callsite leading assembly instructions", kparams.Slice, []string{"thread.callstack.callsite_leading_assembly in ('mov r10,rcx', 'syscall')"}, nil, nil},
+	ThreadCallstackCallsiteTrailingAssembly:            {ThreadCallstackCallsiteTrailingAssembly, "callsite trailing assembly instructions", kparams.Slice, []string{"thread.callstack.callsite_trailing_assembly in ('add esp, 0xab')"}, nil, nil},
+	ThreadCallstackIsUnbacked:                          {ThreadCallstackIsUnbacked, "indicates if the callstack contains unbacked regions", kparams.Bool, []string{"thread.callstack.is_unbacked"}, nil, nil},
+	ThreadCallstackAddresses:                           {ThreadCallstackAddresses, "list of all stack return addresses", kparams.Slice, []string{"thread.callstack.addresses in ('7ffb5c1d0396')"}, nil, nil},
+	ThreadCallstackFinalUserModuleName:                 {ThreadCallstackFinalUserModuleName, "final user space stack frame module name", kparams.UnicodeString, []string{"thread.callstack.final_user_module.name != 'ntdll.dll'"}, nil, nil},
+	ThreadCallstackFinalUserModulePath:                 {ThreadCallstackFinalUserModulePath, "final user space stack frame module path", kparams.UnicodeString, []string{"thread.callstack.final_user_module.path imatches '?:\\Windows\\System32\\ntdll.dll'"}, nil, nil},
+	ThreadCallstackFinalUserSymbolName:                 {ThreadCallstackFinalUserSymbolName, "final user space stack symbol name", kparams.UnicodeString, []string{"thread.callstack.final_user_symbol.name imatches 'CreateProcess*'"}, nil, nil},
+	ThreadCallstackFinalKernelModuleName:               {ThreadCallstackFinalKernelModuleName, "final kernel space stack frame module name", kparams.UnicodeString, []string{"thread.callstack.final_kernel_module.name = 'FLTMGR.SYS'"}, nil, nil},
+	ThreadCallstackFinalKernelModulePath:               {ThreadCallstackFinalKernelModulePath, "final kernel space stack frame module path", kparams.UnicodeString, []string{"thread.callstack.final_kernel_module.path imatches '?:\\WINDOWS\\System32\\drivers\\FLTMGR.SYS'"}, nil, nil},
+	ThreadCallstackFinalKernelSymbolName:               {ThreadCallstackFinalKernelSymbolName, "final kernel space stack symbol name", kparams.UnicodeString, []string{"thread.callstack.final_kernel_symbol.name = 'FltGetStreamContext'"}, nil, nil},
+	ThreadCallstackFinalUserModuleSignatureIsSigned:    {ThreadCallstackFinalUserModuleSignatureIsSigned, "signature status of the final user space stack frame module", kparams.Bool, []string{"thread.callstack.final_user_module.signature.is_signed = true"}, nil, nil},
+	ThreadCallstackFinalUserModuleSignatureIsTrusted:   {ThreadCallstackFinalUserModuleSignatureIsTrusted, "signature trust status of the final user space stack frame module", kparams.Bool, []string{"thread.callstack.final_user_module.signature.is_trusted = true"}, nil, nil},
+	ThreadCallstackFinalUserModuleSignatureCertIssuer:  {ThreadCallstackFinalUserModuleSignatureCertIssuer, "final user space stack frame module signature certificate issuer", kparams.UnicodeString, []string{"thread.callstack.final_user_module.signature.cert.issuer imatches '*Microsoft Corporation*'"}, nil, nil},
+	ThreadCallstackFinalUserModuleSignatureCertSubject: {ThreadCallstackFinalUserModuleSignatureCertSubject, "final user space stack frame module signature certificate subject", kparams.UnicodeString, []string{"thread.callstack.final_user_module.signature.cert.subject imatches '*Microsoft Windows*'"}, nil, nil},
 
-	ImagePath:               {ImagePath, "full image path", kparams.UnicodeString, []string{"image.patj = 'C:\\Windows\\System32\\advapi32.dll'"}, nil},
-	ImageName:               {ImageName, "image name", kparams.UnicodeString, []string{"image.name = 'advapi32.dll'"}, nil},
-	ImageBase:               {ImageBase, "the base address of process in which the image is loaded", kparams.Address, []string{"image.base.address = 'a65d800000'"}, nil},
-	ImageChecksum:           {ImageChecksum, "image checksum", kparams.Uint32, []string{"image.checksum = 746424"}, nil},
-	ImageSize:               {ImageSize, "image size", kparams.Uint32, []string{"image.size > 1024"}, nil},
-	ImageDefaultAddress:     {ImageDefaultAddress, "default image address", kparams.Address, []string{"image.default.address = '7efe0000'"}, nil},
-	ImagePID:                {ImagePID, "target process identifier", kparams.Uint32, []string{"image.pid = 80"}, nil},
-	ImageSignatureType:      {ImageSignatureType, "image signature type", kparams.AnsiString, []string{"image.signature.type != 'NONE'"}, nil},
-	ImageSignatureLevel:     {ImageSignatureLevel, "image signature level", kparams.AnsiString, []string{"image.signature.level = 'AUTHENTICODE'"}, nil},
-	ImageCertSerial:         {ImageCertSerial, "image certificate serial number", kparams.UnicodeString, []string{"image.cert.serial = '330000023241fb59996dcc4dff000000000232'"}, nil},
-	ImageCertSubject:        {ImageCertSubject, "image certificate subject", kparams.UnicodeString, []string{"image.cert.subject contains 'Washington, Redmond, Microsoft Corporation'"}, nil},
-	ImageCertIssuer:         {ImageCertIssuer, "image certificate CA", kparams.UnicodeString, []string{"image.cert.issuer contains 'Washington, Redmond, Microsoft Corporation'"}, nil},
-	ImageCertAfter:          {ImageCertAfter, "image certificate expiration date", kparams.Time, []string{"image.cert.after contains '2024-02-01 00:05:42 +0000 UTC'"}, nil},
-	ImageCertBefore:         {ImageCertBefore, "image certificate enrollment date", kparams.Time, []string{"image.cert.before contains '2024-02-01 00:05:42 +0000 UTC'"}, nil},
-	ImageIsDriverMalicious:  {ImageIsDriverMalicious, "indicates if the loaded driver is malicious", kparams.Bool, []string{"image.is_driver_malicious"}, nil},
-	ImageIsDriverVulnerable: {ImageIsDriverVulnerable, "indicates if the loaded driver is vulnerable", kparams.Bool, []string{"image.is_driver_vulnerable"}, nil},
-	ImageIsDLL:              {ImageIsDLL, "indicates if the loaded image is a DLL", kparams.Bool, []string{"image.is_dll'"}, nil},
-	ImageIsDriver:           {ImageIsDriver, "indicates if the loaded image is a driver", kparams.Bool, []string{"image.is_driver'"}, nil},
-	ImageIsExecutable:       {ImageIsExecutable, "indicates if the loaded image is an executable", kparams.Bool, []string{"image.is_exec'"}, nil},
-	ImageIsDotnet:           {ImageIsDotnet, "indicates if the loaded image is a .NET assembly", kparams.Bool, []string{"image.is_dotnet'"}, nil},
+	ImagePath:               {ImagePath, "full image path", kparams.UnicodeString, []string{"image.patj = 'C:\\Windows\\System32\\advapi32.dll'"}, nil, nil},
+	ImageName:               {ImageName, "image name", kparams.UnicodeString, []string{"image.name = 'advapi32.dll'"}, nil, nil},
+	ImageBase:               {ImageBase, "the base address of process in which the image is loaded", kparams.Address, []string{"image.base.address = 'a65d800000'"}, nil, nil},
+	ImageChecksum:           {ImageChecksum, "image checksum", kparams.Uint32, []string{"image.checksum = 746424"}, nil, nil},
+	ImageSize:               {ImageSize, "image size", kparams.Uint32, []string{"image.size > 1024"}, nil, nil},
+	ImageDefaultAddress:     {ImageDefaultAddress, "default image address", kparams.Address, []string{"image.default.address = '7efe0000'"}, nil, nil},
+	ImagePID:                {ImagePID, "target process identifier", kparams.Uint32, []string{"image.pid = 80"}, nil, nil},
+	ImageSignatureType:      {ImageSignatureType, "image signature type", kparams.AnsiString, []string{"image.signature.type != 'NONE'"}, nil, nil},
+	ImageSignatureLevel:     {ImageSignatureLevel, "image signature level", kparams.AnsiString, []string{"image.signature.level = 'AUTHENTICODE'"}, nil, nil},
+	ImageCertSerial:         {ImageCertSerial, "image certificate serial number", kparams.UnicodeString, []string{"image.cert.serial = '330000023241fb59996dcc4dff000000000232'"}, nil, nil},
+	ImageCertSubject:        {ImageCertSubject, "image certificate subject", kparams.UnicodeString, []string{"image.cert.subject contains 'Washington, Redmond, Microsoft Corporation'"}, nil, nil},
+	ImageCertIssuer:         {ImageCertIssuer, "image certificate CA", kparams.UnicodeString, []string{"image.cert.issuer contains 'Washington, Redmond, Microsoft Corporation'"}, nil, nil},
+	ImageCertAfter:          {ImageCertAfter, "image certificate expiration date", kparams.Time, []string{"image.cert.after contains '2024-02-01 00:05:42 +0000 UTC'"}, nil, nil},
+	ImageCertBefore:         {ImageCertBefore, "image certificate enrollment date", kparams.Time, []string{"image.cert.before contains '2024-02-01 00:05:42 +0000 UTC'"}, nil, nil},
+	ImageIsDriverMalicious:  {ImageIsDriverMalicious, "indicates if the loaded driver is malicious", kparams.Bool, []string{"image.is_driver_malicious"}, nil, nil},
+	ImageIsDriverVulnerable: {ImageIsDriverVulnerable, "indicates if the loaded driver is vulnerable", kparams.Bool, []string{"image.is_driver_vulnerable"}, nil, nil},
+	ImageIsDLL:              {ImageIsDLL, "indicates if the loaded image is a DLL", kparams.Bool, []string{"image.is_dll'"}, nil, nil},
+	ImageIsDriver:           {ImageIsDriver, "indicates if the loaded image is a driver", kparams.Bool, []string{"image.is_driver'"}, nil, nil},
+	ImageIsExecutable:       {ImageIsExecutable, "indicates if the loaded image is an executable", kparams.Bool, []string{"image.is_exec'"}, nil, nil},
+	ImageIsDotnet:           {ImageIsDotnet, "indicates if the loaded image is a .NET assembly", kparams.Bool, []string{"image.is_dotnet'"}, nil, nil},
 
-	FileObject:                      {FileObject, "file object address", kparams.Uint64, []string{"file.object = 18446738026482168384"}, nil},
-	FilePath:                        {FilePath, "full file path", kparams.UnicodeString, []string{"file.path = 'C:\\Windows\\System32'"}, nil},
-	FileName:                        {FileName, "full file name", kparams.UnicodeString, []string{"file.name contains 'mimikatz'"}, nil},
-	FileOperation:                   {FileOperation, "file operation", kparams.AnsiString, []string{"file.operation = 'open'"}, nil},
-	FileShareMask:                   {FileShareMask, "file share mask", kparams.AnsiString, []string{"file.share.mask = 'rw-'"}, nil},
-	FileIOSize:                      {FileIOSize, "file I/O size", kparams.Uint32, []string{"file.io.size > 512"}, nil},
-	FileOffset:                      {FileOffset, "file offset", kparams.Uint64, []string{"file.offset = 1024"}, nil},
-	FileType:                        {FileType, "file type", kparams.AnsiString, []string{"file.type = 'directory'"}, nil},
-	FileExtension:                   {FileExtension, "file extension", kparams.AnsiString, []string{"file.extension = '.dll'"}, nil},
-	FileAttributes:                  {FileAttributes, "file attributes", kparams.Slice, []string{"file.attributes in ('archive', 'hidden')"}, nil},
-	FileStatus:                      {FileStatus, "file operation status message", kparams.UnicodeString, []string{"file.status != 'success'"}, nil},
-	FileViewBase:                    {FileViewBase, "view base address", kparams.Address, []string{"file.view.base = '25d42170000'"}, nil},
-	FileViewSize:                    {FileViewSize, "size of the mapped view", kparams.Uint64, []string{"file.view.size > 1024"}, nil},
-	FileViewType:                    {FileViewType, "type of the mapped view section", kparams.Enum, []string{"file.view.type = 'IMAGE'"}, nil},
-	FileViewProtection:              {FileViewProtection, "protection rights of the section view", kparams.AnsiString, []string{"file.view.protection = 'READONLY'"}, nil},
-	FileIsDriverMalicious:           {FileIsDriverMalicious, "indicates if the dropped driver is malicious", kparams.Bool, []string{"file.is_driver_malicious"}, nil},
-	FileIsDriverVulnerable:          {FileIsDriverVulnerable, "indicates if the dropped driver is vulnerable", kparams.Bool, []string{"file.is_driver_vulnerable"}, nil},
-	FileIsDLL:                       {FileIsDLL, "indicates if the created file is a DLL", kparams.Bool, []string{"file.is_dll'"}, nil},
-	FileIsDriver:                    {FileIsDriver, "indicates if the created file is a driver", kparams.Bool, []string{"file.is_driver'"}, nil},
-	FileIsExecutable:                {FileIsExecutable, "indicates if the created file is an executable", kparams.Bool, []string{"file.is_exec'"}, nil},
-	FilePID:                         {FilePID, "denotes the process id performing file operation", kparams.PID, []string{"file.pid = 4"}, nil},
-	FileKey:                         {FileKey, "uniquely identifies the file object", kparams.Uint64, []string{"file.key = 12446738026482168384"}, nil},
-	FileInfoClass:                   {FileInfoClass, "identifies the file information class", kparams.Enum, []string{"file.info_class = 'Allocation'"}, nil},
-	FileInfoAllocationSize:          {FileInfoAllocationSize, "file allocation size", kparams.Uint64, []string{"file.info.allocation_size > 645400"}, nil},
-	FileInfoEOFSize:                 {FileInfoEOFSize, "file EOF size", kparams.Uint64, []string{"file.info.eof_size > 1000"}, nil},
-	FileInfoIsDispositionDeleteFile: {FileInfoIsDispositionDeleteFile, "indicates if the file is deleted when its handle is closed", kparams.Bool, []string{"file.info.is_disposition_file_delete = true"}, nil},
+	FileObject:                      {FileObject, "file object address", kparams.Uint64, []string{"file.object = 18446738026482168384"}, nil, nil},
+	FilePath:                        {FilePath, "full file path", kparams.UnicodeString, []string{"file.path = 'C:\\Windows\\System32'"}, nil, nil},
+	FileName:                        {FileName, "full file name", kparams.UnicodeString, []string{"file.name contains 'mimikatz'"}, nil, nil},
+	FileOperation:                   {FileOperation, "file operation", kparams.AnsiString, []string{"file.operation = 'open'"}, nil, nil},
+	FileShareMask:                   {FileShareMask, "file share mask", kparams.AnsiString, []string{"file.share.mask = 'rw-'"}, nil, nil},
+	FileIOSize:                      {FileIOSize, "file I/O size", kparams.Uint32, []string{"file.io.size > 512"}, nil, nil},
+	FileOffset:                      {FileOffset, "file offset", kparams.Uint64, []string{"file.offset = 1024"}, nil, nil},
+	FileType:                        {FileType, "file type", kparams.AnsiString, []string{"file.type = 'directory'"}, nil, nil},
+	FileExtension:                   {FileExtension, "file extension", kparams.AnsiString, []string{"file.extension = '.dll'"}, nil, nil},
+	FileAttributes:                  {FileAttributes, "file attributes", kparams.Slice, []string{"file.attributes in ('archive', 'hidden')"}, nil, nil},
+	FileStatus:                      {FileStatus, "file operation status message", kparams.UnicodeString, []string{"file.status != 'success'"}, nil, nil},
+	FileViewBase:                    {FileViewBase, "view base address", kparams.Address, []string{"file.view.base = '25d42170000'"}, nil, nil},
+	FileViewSize:                    {FileViewSize, "size of the mapped view", kparams.Uint64, []string{"file.view.size > 1024"}, nil, nil},
+	FileViewType:                    {FileViewType, "type of the mapped view section", kparams.Enum, []string{"file.view.type = 'IMAGE'"}, nil, nil},
+	FileViewProtection:              {FileViewProtection, "protection rights of the section view", kparams.AnsiString, []string{"file.view.protection = 'READONLY'"}, nil, nil},
+	FileIsDriverMalicious:           {FileIsDriverMalicious, "indicates if the dropped driver is malicious", kparams.Bool, []string{"file.is_driver_malicious"}, nil, nil},
+	FileIsDriverVulnerable:          {FileIsDriverVulnerable, "indicates if the dropped driver is vulnerable", kparams.Bool, []string{"file.is_driver_vulnerable"}, nil, nil},
+	FileIsDLL:                       {FileIsDLL, "indicates if the created file is a DLL", kparams.Bool, []string{"file.is_dll'"}, nil, nil},
+	FileIsDriver:                    {FileIsDriver, "indicates if the created file is a driver", kparams.Bool, []string{"file.is_driver'"}, nil, nil},
+	FileIsExecutable:                {FileIsExecutable, "indicates if the created file is an executable", kparams.Bool, []string{"file.is_exec'"}, nil, nil},
+	FilePID:                         {FilePID, "denotes the process id performing file operation", kparams.PID, []string{"file.pid = 4"}, nil, nil},
+	FileKey:                         {FileKey, "uniquely identifies the file object", kparams.Uint64, []string{"file.key = 12446738026482168384"}, nil, nil},
+	FileInfoClass:                   {FileInfoClass, "identifies the file information class", kparams.Enum, []string{"file.info_class = 'Allocation'"}, nil, nil},
+	FileInfoAllocationSize:          {FileInfoAllocationSize, "file allocation size", kparams.Uint64, []string{"file.info.allocation_size > 645400"}, nil, nil},
+	FileInfoEOFSize:                 {FileInfoEOFSize, "file EOF size", kparams.Uint64, []string{"file.info.eof_size > 1000"}, nil, nil},
+	FileInfoIsDispositionDeleteFile: {FileInfoIsDispositionDeleteFile, "indicates if the file is deleted when its handle is closed", kparams.Bool, []string{"file.info.is_disposition_file_delete = true"}, nil, nil},
 
-	RegistryPath:      {RegistryPath, "fully qualified registry path", kparams.UnicodeString, []string{"registry.path = 'HKEY_LOCAL_MACHINE\\SYSTEM'"}, nil},
-	RegistryKeyName:   {RegistryKeyName, "registry key name", kparams.UnicodeString, []string{"registry.key.name = 'CurrentControlSet'"}, nil},
-	RegistryKeyHandle: {RegistryKeyHandle, "registry key object address", kparams.Address, []string{"registry.key.handle = 'FFFFB905D60C2268'"}, nil},
-	RegistryValue:     {RegistryValue, "registry value content", kparams.UnicodeString, []string{"registry.value = '%SystemRoot%\\system32'"}, nil},
-	RegistryValueType: {RegistryValueType, "type of registry value", kparams.UnicodeString, []string{"registry.value.type = 'REG_SZ'"}, nil},
-	RegistryStatus:    {RegistryStatus, "status of registry operation", kparams.UnicodeString, []string{"registry.status != 'success'"}, nil},
+	RegistryPath:      {RegistryPath, "fully qualified registry path", kparams.UnicodeString, []string{"registry.path = 'HKEY_LOCAL_MACHINE\\SYSTEM'"}, nil, nil},
+	RegistryKeyName:   {RegistryKeyName, "registry key name", kparams.UnicodeString, []string{"registry.key.name = 'CurrentControlSet'"}, nil, nil},
+	RegistryKeyHandle: {RegistryKeyHandle, "registry key object address", kparams.Address, []string{"registry.key.handle = 'FFFFB905D60C2268'"}, nil, nil},
+	RegistryValue:     {RegistryValue, "registry value content", kparams.UnicodeString, []string{"registry.value = '%SystemRoot%\\system32'"}, nil, nil},
+	RegistryValueType: {RegistryValueType, "type of registry value", kparams.UnicodeString, []string{"registry.value.type = 'REG_SZ'"}, nil, nil},
+	RegistryStatus:    {RegistryStatus, "status of registry operation", kparams.UnicodeString, []string{"registry.status != 'success'"}, nil, nil},
 
-	NetDIP:        {NetDIP, "destination IP address", kparams.IP, []string{"net.dip = 172.17.0.3"}, nil},
-	NetSIP:        {NetSIP, "source IP address", kparams.IP, []string{"net.sip = 127.0.0.1"}, nil},
-	NetDport:      {NetDport, "destination port", kparams.Uint16, []string{"net.dport in (80, 443, 8080)"}, nil},
-	NetSport:      {NetSport, "source port", kparams.Uint16, []string{"net.sport != 3306"}, nil},
-	NetDportName:  {NetDportName, "destination port name", kparams.AnsiString, []string{"net.dport.name = 'dns'"}, nil},
-	NetSportName:  {NetSportName, "source port name", kparams.AnsiString, []string{"net.sport.name = 'http'"}, nil},
-	NetL4Proto:    {NetL4Proto, "layer 4 protocol name", kparams.AnsiString, []string{"net.l4.proto = 'TCP"}, nil},
-	NetPacketSize: {NetPacketSize, "packet size", kparams.Uint32, []string{"net.size > 512"}, nil},
-	NetSIPNames:   {NetSIPNames, "source IP names", kparams.Slice, []string{"net.sip.names in ('github.com.')"}, nil},
-	NetDIPNames:   {NetDIPNames, "destination IP names", kparams.Slice, []string{"net.dip.names in ('github.com.')"}, nil},
+	NetDIP:        {NetDIP, "destination IP address", kparams.IP, []string{"net.dip = 172.17.0.3"}, nil, nil},
+	NetSIP:        {NetSIP, "source IP address", kparams.IP, []string{"net.sip = 127.0.0.1"}, nil, nil},
+	NetDport:      {NetDport, "destination port", kparams.Uint16, []string{"net.dport in (80, 443, 8080)"}, nil, nil},
+	NetSport:      {NetSport, "source port", kparams.Uint16, []string{"net.sport != 3306"}, nil, nil},
+	NetDportName:  {NetDportName, "destination port name", kparams.AnsiString, []string{"net.dport.name = 'dns'"}, nil, nil},
+	NetSportName:  {NetSportName, "source port name", kparams.AnsiString, []string{"net.sport.name = 'http'"}, nil, nil},
+	NetL4Proto:    {NetL4Proto, "layer 4 protocol name", kparams.AnsiString, []string{"net.l4.proto = 'TCP"}, nil, nil},
+	NetPacketSize: {NetPacketSize, "packet size", kparams.Uint32, []string{"net.size > 512"}, nil, nil},
+	NetSIPNames:   {NetSIPNames, "source IP names", kparams.Slice, []string{"net.sip.names in ('github.com.')"}, nil, nil},
+	NetDIPNames:   {NetDIPNames, "destination IP names", kparams.Slice, []string{"net.dip.names in ('github.com.')"}, nil, nil},
 
-	HandleID:     {HandleID, "handle identifier", kparams.Uint16, []string{"handle.id = 24"}, nil},
-	HandleObject: {HandleObject, "handle object address", kparams.Address, []string{"handle.object = 'FFFFB905DBF61988'"}, nil},
-	HandleName:   {HandleName, "handle name", kparams.UnicodeString, []string{"handle.name = '\\Device\\NamedPipe\\chrome.12644.28.105826381'"}, nil},
-	HandleType:   {HandleType, "handle type", kparams.AnsiString, []string{"handle.type = 'Mutant'"}, nil},
+	HandleID:     {HandleID, "handle identifier", kparams.Uint16, []string{"handle.id = 24"}, nil, nil},
+	HandleObject: {HandleObject, "handle object address", kparams.Address, []string{"handle.object = 'FFFFB905DBF61988'"}, nil, nil},
+	HandleName:   {HandleName, "handle name", kparams.UnicodeString, []string{"handle.name = '\\Device\\NamedPipe\\chrome.12644.28.105826381'"}, nil, nil},
+	HandleType:   {HandleType, "handle type", kparams.AnsiString, []string{"handle.type = 'Mutant'"}, nil, nil},
 
-	PeNumSections:     {PeNumSections, "number of sections", kparams.Uint16, []string{"pe.nsections < 5"}, nil},
-	PeNumSymbols:      {PeNumSymbols, "number of entries in the symbol table", kparams.Uint32, []string{"pe.nsymbols > 230"}, nil},
-	PeBaseAddress:     {PeBaseAddress, "image base address", kparams.Address, []string{"pe.address.base = '140000000'"}, nil},
-	PeEntrypoint:      {PeEntrypoint, "address of the entrypoint function", kparams.Address, []string{"pe.address.entrypoint = '20110'"}, nil},
-	PeSections:        {PeSections, "PE sections", kparams.Object, []string{"pe.sections[.text].entropy > 6.2"}, nil},
-	PeSymbols:         {PeSymbols, "imported symbols", kparams.Slice, []string{"pe.symbols in ('GetTextFaceW', 'GetProcessHeap')"}, nil},
-	PeImports:         {PeImports, "imported dynamic linked libraries", kparams.Slice, []string{"pe.imports in ('msvcrt.dll', 'GDI32.dll'"}, nil},
-	PeResources:       {PeResources, "version and other resources", kparams.Map, []string{"pe.resources[FileDescription] = 'Notepad'"}, nil},
-	PeCompany:         {PeCompany, "internal company name of the file provided at compile-time", kparams.UnicodeString, []string{"pe.company = 'Microsoft Corporation'"}, nil},
-	PeCopyright:       {PeCopyright, "copyright notice for the file emitted at compile-time", kparams.UnicodeString, []string{"pe.copyright = '© Microsoft Corporation'"}, nil},
-	PeDescription:     {PeDescription, "internal description of the file provided at compile-time", kparams.UnicodeString, []string{"pe.description = 'Notepad'"}, nil},
-	PeFileName:        {PeFileName, "original file name supplied at compile-time", kparams.UnicodeString, []string{"pe.file.name = 'NOTEPAD.EXE'"}, nil},
-	PeFileVersion:     {PeFileVersion, "file version supplied at compile-time", kparams.UnicodeString, []string{"pe.file.version = '10.0.18362.693 (WinBuild.160101.0800)'"}, nil},
-	PeProduct:         {PeProduct, "internal product name of the file provided at compile-time", kparams.UnicodeString, []string{"pe.product = 'Microsoft® Windows® Operating System'"}, nil},
-	PeProductVersion:  {PeProductVersion, "internal product version of the file provided at compile-time", kparams.UnicodeString, []string{"pe.product.version = '10.0.18362.693'"}, nil},
-	PeIsDLL:           {PeIsDLL, "indicates if the loaded image or created file is a DLL", kparams.Bool, []string{"pe.is_dll'"}, &Deprecation{Since: "2.0.0", Fields: []Field{FileIsDLL, ImageIsDLL}}},
-	PeIsDriver:        {PeIsDriver, "indicates if the loaded image or created file is a driver", kparams.Bool, []string{"pe.is_driver'"}, &Deprecation{Since: "2.0.0", Fields: []Field{FileIsDriver, ImageIsDriver}}},
-	PeIsExecutable:    {PeIsExecutable, "indicates if the loaded image or created file is an executable", kparams.Bool, []string{"pe.is_exec'"}, &Deprecation{Since: "2.0.0", Fields: []Field{FileIsExecutable, ImageIsExecutable}}},
-	PeImphash:         {PeImphash, "import hash", kparams.AnsiString, []string{"pe.impash = '5d3861c5c547f8a34e471ba273a732b2'"}, nil},
-	PeIsDotnet:        {PeIsDotnet, "indicates if PE contains CLR data", kparams.Bool, []string{"pe.is_dotnet"}, nil},
-	PeAnomalies:       {PeAnomalies, "contains PE anomalies detected during parsing", kparams.Slice, []string{"pe.anomalies in ('number of sections is 0')"}, nil},
-	PeIsSigned:        {PeIsSigned, "indicates if the PE has embedded or catalog signature", kparams.Bool, []string{"pe.is_signed"}, nil},
-	PeIsTrusted:       {PeIsTrusted, "indicates if the PE certificate chain is trusted", kparams.Bool, []string{"pe.is_trusted"}, nil},
-	PeCertSerial:      {PeCertSerial, "PE certificate serial number", kparams.UnicodeString, []string{"pe.cert.serial = '330000023241fb59996dcc4dff000000000232'"}, nil},
-	PeCertSubject:     {PeCertSubject, "PE certificate subject", kparams.UnicodeString, []string{"pe.cert.subject contains 'Washington, Redmond, Microsoft Corporation'"}, nil},
-	PeCertIssuer:      {PeCertIssuer, "PE certificate CA", kparams.UnicodeString, []string{"pe.cert.issuer contains 'Washington, Redmond, Microsoft Corporation'"}, nil},
-	PeCertAfter:       {PeCertAfter, "PE certificate expiration date", kparams.Time, []string{"pe.cert.after contains '2024-02-01 00:05:42 +0000 UTC'"}, nil},
-	PeCertBefore:      {PeCertBefore, "PE certificate enrollment date", kparams.Time, []string{"pe.cert.before contains '2024-02-01 00:05:42 +0000 UTC'"}, nil},
-	PeIsModified:      {PeIsModified, "indicates if disk and in-memory PE headers differ", kparams.Bool, []string{"pe.is_modified"}, nil},
-	PePsChildFileName: {PePsChildFileName, "original file name of the child process executable supplied at compile-time", kparams.UnicodeString, []string{"pe.ps.child.file.name = 'NOTEPAD.EXE'"}, &Deprecation{Since: "2.3.0", Fields: []Field{PsChildPeFilename}}},
+	PeNumSections: {PeNumSections, "number of sections", kparams.Uint16, []string{"pe.nsections < 5"}, nil, nil},
+	PeNumSymbols:  {PeNumSymbols, "number of entries in the symbol table", kparams.Uint32, []string{"pe.nsymbols > 230"}, nil, nil},
+	PeBaseAddress: {PeBaseAddress, "image base address", kparams.Address, []string{"pe.address.base = '140000000'"}, nil, nil},
+	PeEntrypoint:  {PeEntrypoint, "address of the entrypoint function", kparams.Address, []string{"pe.address.entrypoint = '20110'"}, nil, nil},
+	PeSymbols:     {PeSymbols, "imported symbols", kparams.Slice, []string{"pe.symbols in ('GetTextFaceW', 'GetProcessHeap')"}, nil, nil},
+	PeImports:     {PeImports, "imported dynamic linked libraries", kparams.Slice, []string{"pe.imports in ('msvcrt.dll', 'GDI32.dll'"}, nil, nil},
 
-	MemBaseAddress:    {MemBaseAddress, "region base address", kparams.Address, []string{"mem.address = '211d13f2000'"}, nil},
-	MemRegionSize:     {MemRegionSize, "region size", kparams.Uint64, []string{"mem.size > 438272"}, nil},
-	MemAllocType:      {MemAllocType, "region allocation or release type", kparams.Flags, []string{"mem.alloc = 'COMMIT'"}, nil},
-	MemPageType:       {MemPageType, "page type of the allocated region", kparams.Enum, []string{"mem.type = 'PRIVATE'"}, nil},
-	MemProtection:     {MemProtection, "allocated region protection type", kparams.Enum, []string{"mem.protection = 'READWRITE'"}, nil},
-	MemProtectionMask: {MemProtectionMask, "allocated region protection in mask notation", kparams.Enum, []string{"mem.protection.mask = 'RWX'"}, nil},
+	PeResources: {PeResources, "version resources", kparams.Map, []string{"pe.resources[FileDescription] = 'Notepad'"}, nil, &Argument{Optional: true, Pattern: "[a-zA-Z0-9_]+", ValidationFunc: func(s string) bool {
+		for _, c := range s {
+			switch {
+			case unicode.IsLower(c):
+			case unicode.IsUpper(c):
+			case unicode.IsNumber(c):
+			case c == '_':
+			default:
+				return false
+			}
+		}
+		return true
+	}}},
 
-	DNSName:    {DNSName, "dns query name", kparams.UnicodeString, []string{"dns.name = 'example.org'"}, nil},
-	DNSRR:      {DNSRR, "dns resource record type", kparams.AnsiString, []string{"dns.rr = 'AA'"}, nil},
-	DNSOptions: {DNSOptions, "dns query options", kparams.Flags64, []string{"dns.options in ('ADDRCONFIG', 'DUAL_ADDR')"}, nil},
-	DNSRcode:   {DNSRR, "dns response status", kparams.AnsiString, []string{"dns.rcode = 'NXDOMAIN'"}, nil},
-	DNSAnswers: {DNSAnswers, "dns response answers", kparams.Slice, []string{"dns.answers in ('o.lencr.edgesuite.net', 'a1887.dscq.akamai.net')"}, nil},
+	PeCompany:         {PeCompany, "internal company name of the file provided at compile-time", kparams.UnicodeString, []string{"pe.company = 'Microsoft Corporation'"}, nil, nil},
+	PeCopyright:       {PeCopyright, "copyright notice for the file emitted at compile-time", kparams.UnicodeString, []string{"pe.copyright = '© Microsoft Corporation'"}, nil, nil},
+	PeDescription:     {PeDescription, "internal description of the file provided at compile-time", kparams.UnicodeString, []string{"pe.description = 'Notepad'"}, nil, nil},
+	PeFileName:        {PeFileName, "original file name supplied at compile-time", kparams.UnicodeString, []string{"pe.file.name = 'NOTEPAD.EXE'"}, nil, nil},
+	PeFileVersion:     {PeFileVersion, "file version supplied at compile-time", kparams.UnicodeString, []string{"pe.file.version = '10.0.18362.693 (WinBuild.160101.0800)'"}, nil, nil},
+	PeProduct:         {PeProduct, "internal product name of the file provided at compile-time", kparams.UnicodeString, []string{"pe.product = 'Microsoft® Windows® Operating System'"}, nil, nil},
+	PeProductVersion:  {PeProductVersion, "internal product version of the file provided at compile-time", kparams.UnicodeString, []string{"pe.product.version = '10.0.18362.693'"}, nil, nil},
+	PeIsDLL:           {PeIsDLL, "indicates if the loaded image or created file is a DLL", kparams.Bool, []string{"pe.is_dll'"}, &Deprecation{Since: "2.0.0", Fields: []Field{FileIsDLL, ImageIsDLL}}, nil},
+	PeIsDriver:        {PeIsDriver, "indicates if the loaded image or created file is a driver", kparams.Bool, []string{"pe.is_driver'"}, &Deprecation{Since: "2.0.0", Fields: []Field{FileIsDriver, ImageIsDriver}}, nil},
+	PeIsExecutable:    {PeIsExecutable, "indicates if the loaded image or created file is an executable", kparams.Bool, []string{"pe.is_exec'"}, &Deprecation{Since: "2.0.0", Fields: []Field{FileIsExecutable, ImageIsExecutable}}, nil},
+	PeImphash:         {PeImphash, "import hash", kparams.AnsiString, []string{"pe.impash = '5d3861c5c547f8a34e471ba273a732b2'"}, nil, nil},
+	PeIsDotnet:        {PeIsDotnet, "indicates if PE contains CLR data", kparams.Bool, []string{"pe.is_dotnet"}, nil, nil},
+	PeAnomalies:       {PeAnomalies, "contains PE anomalies detected during parsing", kparams.Slice, []string{"pe.anomalies in ('number of sections is 0')"}, nil, nil},
+	PeIsSigned:        {PeIsSigned, "indicates if the PE has embedded or catalog signature", kparams.Bool, []string{"pe.is_signed"}, nil, nil},
+	PeIsTrusted:       {PeIsTrusted, "indicates if the PE certificate chain is trusted", kparams.Bool, []string{"pe.is_trusted"}, nil, nil},
+	PeCertSerial:      {PeCertSerial, "PE certificate serial number", kparams.UnicodeString, []string{"pe.cert.serial = '330000023241fb59996dcc4dff000000000232'"}, nil, nil},
+	PeCertSubject:     {PeCertSubject, "PE certificate subject", kparams.UnicodeString, []string{"pe.cert.subject contains 'Washington, Redmond, Microsoft Corporation'"}, nil, nil},
+	PeCertIssuer:      {PeCertIssuer, "PE certificate CA", kparams.UnicodeString, []string{"pe.cert.issuer contains 'Washington, Redmond, Microsoft Corporation'"}, nil, nil},
+	PeCertAfter:       {PeCertAfter, "PE certificate expiration date", kparams.Time, []string{"pe.cert.after contains '2024-02-01 00:05:42 +0000 UTC'"}, nil, nil},
+	PeCertBefore:      {PeCertBefore, "PE certificate enrollment date", kparams.Time, []string{"pe.cert.before contains '2024-02-01 00:05:42 +0000 UTC'"}, nil, nil},
+	PeIsModified:      {PeIsModified, "indicates if disk and in-memory PE headers differ", kparams.Bool, []string{"pe.is_modified"}, nil, nil},
+	PePsChildFileName: {PePsChildFileName, "original file name of the child process executable supplied at compile-time", kparams.UnicodeString, []string{"pe.ps.child.file.name = 'NOTEPAD.EXE'"}, &Deprecation{Since: "2.3.0", Fields: []Field{PsChildPeFilename}}, nil},
+
+	MemBaseAddress:    {MemBaseAddress, "region base address", kparams.Address, []string{"mem.address = '211d13f2000'"}, nil, nil},
+	MemRegionSize:     {MemRegionSize, "region size", kparams.Uint64, []string{"mem.size > 438272"}, nil, nil},
+	MemAllocType:      {MemAllocType, "region allocation or release type", kparams.Flags, []string{"mem.alloc = 'COMMIT'"}, nil, nil},
+	MemPageType:       {MemPageType, "page type of the allocated region", kparams.Enum, []string{"mem.type = 'PRIVATE'"}, nil, nil},
+	MemProtection:     {MemProtection, "allocated region protection type", kparams.Enum, []string{"mem.protection = 'READWRITE'"}, nil, nil},
+	MemProtectionMask: {MemProtectionMask, "allocated region protection in mask notation", kparams.Enum, []string{"mem.protection.mask = 'RWX'"}, nil, nil},
+
+	DNSName:    {DNSName, "dns query name", kparams.UnicodeString, []string{"dns.name = 'example.org'"}, nil, nil},
+	DNSRR:      {DNSRR, "dns resource record type", kparams.AnsiString, []string{"dns.rr = 'AA'"}, nil, nil},
+	DNSOptions: {DNSOptions, "dns query options", kparams.Flags64, []string{"dns.options in ('ADDRCONFIG', 'DUAL_ADDR')"}, nil, nil},
+	DNSRcode:   {DNSRR, "dns response status", kparams.AnsiString, []string{"dns.rcode = 'NXDOMAIN'"}, nil, nil},
+	DNSAnswers: {DNSAnswers, "dns response answers", kparams.Slice, []string{"dns.answers in ('o.lencr.edgesuite.net', 'a1887.dscq.akamai.net')"}, nil, nil},
 }
 
-// Lookup finds the field literal in the map. For the nested fields, it checks the pattern matches
-// the expected one and compares the paths. If all checks pass, the full segment field literal
-// is returned.
-func Lookup(name string) Field {
-	if _, ok := fields[Field(name)]; ok {
-		return Field(name)
+// ArgumentOf returns argument data for the specified field.
+func ArgumentOf(name string) *Argument {
+	f, ok := fields[Field(name)]
+	if !ok {
+		// this can happen for pseudo fields
+		return nil
 	}
-	groups := pathRegexp.FindStringSubmatch(name)
-	if len(groups) != 4 {
-		return None
-	}
+	return f.Argument
+}
 
-	field := groups[1]   // `ps.envs` is a field in ps.envs[PATH]
-	key := groups[2]     // `PATH` is a key in ps.envs[PATH]
-	segment := groups[3] // `entropy` is a segment in pe.sections[.text].entropy
-
-	switch Field(field) {
-	case PeSections:
-		if segment == "" {
-			return None
-		}
-		if Segment(segment).IsSection() {
-			return Field(name)
-		}
-	case PsModules:
-		if segment == "" {
-			return None
-		}
-		if Segment(segment).IsModule() {
-			return Field(name)
-		}
-	case PsAncestor:
-		if segment == "" {
-			return None
-		}
-		// the key is either the number
-		// that represents the depth of
-		// the ancestor process node or the
-		// `root` keyword to designate the
-		// root ancestor process node. Additionally,
-		// we can also get the `any` keyword
-		// that collects the fields of all
-		// ancestor processes
-		var keyRegexp = regexp.MustCompile(`^[1-9]+$|^root$|^any$`)
-		if !keyRegexp.MatchString(key) {
-			return None
-		}
-		if Segment(segment).IsProcess() {
-			return Field(name)
-		}
-	case PeResources:
-		if key != "" && segment == "" {
-			return Field(name)
-		}
-	case PsEnvs, KevtArg:
-		if key != "" {
-			return Field(name)
-		}
-	case ThreadCallstack:
-		if segment == "" {
-			return None
-		}
-		// the key can be the stack frame
-		// index with 0 being the bottom
-		// userspace frame. u/k start/end
-		// keys identify the start/end
-		// user and kernel space frames.
-		// Lastly, it is possible to specify
-		// the name of the module from which
-		// the call was originated
-		var keyRegexp = regexp.MustCompile(`^[0-9]+$|^uend$|^ustart$|^kend$|^kstart$|^[a-zA-Z0-9]+\.dll$`)
-		if !keyRegexp.MatchString(key) {
-			return None
-		}
-		if Segment(segment).IsCallstack() {
-			return Field(name)
-		}
+// IsField returns true if the provided string is a
+// recognized field or pseudo field. Otherwise, it
+// returns false.
+func IsField(name string) bool {
+	if _, ok := fields[Field(name)]; ok || IsPseudoField(Field(name)) {
+		return true
 	}
-	return None
+	return false
 }

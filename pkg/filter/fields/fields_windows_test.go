@@ -23,34 +23,24 @@ import (
 	"testing"
 )
 
-func TestLookup(t *testing.T) {
-	assert.Equal(t, PsPid, Lookup("ps.pid"))
-	assert.Equal(t, Field("ps.envs[ALLUSERSPROFILE]"), Lookup("ps.envs[ALLUSERSPROFILE]"))
-	assert.Empty(t, Lookup("ps.envs[ALLUSERSPROFILE"))
-	assert.Empty(t, Lookup("ps.envs["))
-	assert.Empty(t, Lookup("ps.envs[]"))
-	assert.Equal(t, PsEnvs, Lookup("ps.envs"))
-	assert.Equal(t, Field("ps.pe.sections[.debug$S].entropy"), Lookup("ps.pe.sections[.debug$S].entropy"))
-	assert.Empty(t, Lookup("ps.pe.sections[.debug$S"))
-	assert.Empty(t, Lookup("ps.pe.sections[.debug$S]"))
-	assert.Empty(t, Lookup("ps.pe.sections[.debug$S]."))
-	assert.Empty(t, Lookup("ps.pe.sections[.debug$S].e"))
-	assert.Equal(t, Field("ps.ancestor[1].name"), Lookup("ps.ancestor[1].name"))
-	assert.Equal(t, Field("ps.ancestor[root].name"), Lookup("ps.ancestor[root].name"))
-	assert.Equal(t, Field("ps.ancestor[any].pid"), Lookup("ps.ancestor[any].pid"))
-	assert.Equal(t, None, Lookup("ps.ancestor[anyroot].pid"))
-	assert.Equal(t, Field("ps.ancestor[2].sid"), Lookup("ps.ancestor[2].sid"))
-	assert.Empty(t, Lookup("ps.ancestor[ro].name"))
-	assert.Equal(t, Field("kevt.arg[exe]"), Lookup("kevt.arg[exe]"))
-	assert.Empty(t, Lookup("kevt.arg"))
-	assert.Equal(t, Field("thread.callstack[0].address"), Lookup("thread.callstack[0].address"))
-	assert.Equal(t, Field("thread.callstack[ustart].address"), Lookup("thread.callstack[ustart].address"))
-	assert.Equal(t, Field("thread.callstack[kend].address"), Lookup("thread.callstack[kend].address"))
-	assert.Equal(t, None, Lookup("thread.callstack[uk].address"))
-	assert.Equal(t, None, Lookup("thread.callstack[ntdll].address"))
-	assert.Equal(t, Field("thread.callstack[ntdll.dll].address"), Lookup("thread.callstack[ntdll.dll].address"))
-	assert.Equal(t, Field("thread.callstack[kernel32.dll].address"), Lookup("thread.callstack[kernel32.dll].address"))
-	assert.Equal(t, None, Lookup("thread.callstack[1u].address"))
+func TestIsField(t *testing.T) {
+	var tests = []struct {
+		name    string
+		isField bool
+	}{
+		{"ps.pid", true},
+		{"ps.none", false},
+		{"ps.envs[ALLUSERSPROFILE]", false},
+		{"kevt.arg", true},
+		{"thread._callstack", true},
+		{"kevt._callstack", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.isField, IsField(tt.name))
+		})
+	}
 }
 
 func TestIsDeprecated(t *testing.T) {
